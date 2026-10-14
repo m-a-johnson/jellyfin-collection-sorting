@@ -4,10 +4,11 @@ Two classes, split on purpose:
 
 * JellyfinReader sends GET requests only. It has no way to change anything.
 * CollectionWriter is the only code that can change anything, and it can only
-  send POST or DELETE to /Collections/{32-hex id}/Items. That path adds or
-  removes a collection's membership and never touches the media. It cannot
-  reach DELETE /Items, which deletes media from the filesystem: the method,
-  the path and every ID are validated before any request is built.
+  send three kinds of request: POST /Collections (create an empty collection),
+  and POST or DELETE /Collections/{32-hex id}/Items (add or remove membership,
+  which never touches the media). It cannot reach DELETE /Items, which deletes
+  media from the filesystem: the method, the path and every ID are validated
+  before any request is built.
 """
 from __future__ import annotations
 
@@ -29,6 +30,12 @@ class JellyfinError(Exception):
 def nid(value: Any) -> str:
     """Normalise an item ID (Jellyfin shows them with or without dashes)."""
     return str(value).replace("-", "").lower()
+
+
+def valid_collection_name(name: Any) -> bool:
+    """1 to 100 characters, already trimmed, no control characters."""
+    return (isinstance(name, str) and name == name.strip() and 1 <= len(name) <= 100
+            and not any(ord(c) < 32 or ord(c) == 127 for c in name))
 
 
 def _make_client(url: str, api_key: str, verify_tls: bool, timeout: float) -> httpx.AsyncClient:
@@ -69,6 +76,24 @@ class CollectionWriter:
         if resp.status_code >= 400:
             body = resp.text.strip().replace("\n", " ")[:200]
             raise JellyfinError(f"{method} {path} -> HTTP {resp.status_code}: {body}")
+
+    async def create(self, name: str) -> str | None:
+        """Create an empty collection. Returns its id, or None if Jellyfin does not say."""
+        if not valid_collection_name(name):
+            raise ValueError("invalid collection name")
+        try:
+            resp = await self._client.request("POST", "/Collections", params={"name": name})
+        except httpx.HTTPError as exc:
+            raise JellyfinError(f"POST /Collections failed: {type(exc).__name__}: {exc}") from exc
+        if resp.status_code >= 400:
+            body = resp.text.strip().replace("\n", " ")[:200]
+            raise JellyfinError(f"POST /Collections -> HTTP {resp.status_code}: {body}")
+        try:
+            data = resp.json()
+        except ValueError:
+            return None
+        raw = data.get("Id") if isinstance(data, dict) else None
+        return nid(raw) if raw else None
 
     async def add(self, collection_id: str, ids: list[str]) -> None:
         for i in range(0, len(ids), WRITE_CHUNK):

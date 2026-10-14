@@ -6,6 +6,8 @@ Scenario switches (environment variables):
   MOCK_NO_AUTOCOL=1    /AutoCollections/ExportConfiguration returns 404
   MOCK_REPEATED_ONLY=1 collection writes reject comma-separated ids with HTTP 400
   MOCK_FAIL_REMOVE=1   DELETE /Collections/{id}/Items returns HTTP 500
+  MOCK_REFUSE_EMPTY_CREATE=1  POST /Collections without ids returns HTTP 400
+  MOCK_CREATE_NO_BODY=1       POST /Collections returns 204 with no id
 
 Every write is recorded and readable at GET /__log, including any call to
 DELETE /Items (which the app must never send).
@@ -122,7 +124,8 @@ def item_collections(item_id: str):
 def export():
     if os.environ.get("MOCK_NO_AUTOCOL"):
         raise HTTPException(404, "not found")
-    return {"TitleMatchPairs": [{"TitleMatch": "Star Wars", "CollectionName": "Star Wars Collection"}],
+    return {"TitleMatchPairs": [{"TitleMatch": "Star Wars", "CollectionName": "Star Wars Collection"},
+                                {"TitleMatch": "Middle Earth", "CollectionName": "Middle Earth"}],
             "ExpressionCollections": []}
 
 
@@ -149,6 +152,20 @@ def _write(method: str, cid: str, request: Request):
         else:
             target["members"] = [m for m in target["members"] if m["Id"] != i]
     return Response(status_code=204)
+
+
+@app.post("/Collections")
+def create_collection(request: Request):
+    name = request.query_params.get("name", "")
+    LOG.append({"method": "POST", "path": request.url.path, "name": name,
+                "params": sorted(request.query_params.keys())})
+    if os.environ.get("MOCK_REFUSE_EMPTY_CREATE") and not request.query_params.get("ids"):
+        return JSONResponse({"error": "ids required"}, status_code=400)
+    new = box(len(BOXSETS) + 1, name, [])
+    BOXSETS.append(new)
+    if os.environ.get("MOCK_CREATE_NO_BODY"):
+        return Response(status_code=204)
+    return {"Id": dashed(new["Id"])}
 
 
 @app.post("/Collections/{cid}/Items")

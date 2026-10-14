@@ -76,6 +76,8 @@
     .dual { grid-template-columns:1fr; }
     .mid { flex-direction:row; justify-content:center; }
   }
+  .newcol { display: inline-flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+  .newcol input { min-width: 12rem; }
 </style>
 </head>
 <body>
@@ -112,6 +114,7 @@ const state = {
   snap: null, tab: "editor", libs: new Set(), query: "", ignoreManaged: true, checks: null,
   editCol: null, pendAdd: new Set(), pendRem: new Set(), selL: new Set(), selR: new Set(),
   lastL: null, lastR: null, qL: "", qR: "", confirming: false, busy: false, result: null,
+  creating: false, newName: "",
 };
 let ed = {};   // handles to the editor's DOM nodes, rebuilt whenever the editor tab renders
 const TABS = [["editor", "Editor"], ["shows", "Shows"], ["uncollected", "Uncollected"],
@@ -367,9 +370,49 @@ async function doApply() {
   await load(true, failed);
 }
 
+async function doCreate() {
+  const name = state.newName.trim();
+  if (!name || state.busy) return;
+  state.busy = true; setMsg(""); updateEditor();
+  let failed = false;
+  try {
+    const resp = await fetch("/api/collections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "jf-collections" },
+      body: JSON.stringify({ name }),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+    state.result = { created: true, name: body.name, verified: body.verified };
+    if (body.id) state.editCol = body.id;
+    clearEdits();
+    state.creating = false; state.newName = "";
+  } catch (e) { failed = true; setMsg(`Not created: ${e.message}`); }
+  state.busy = false;
+  await load(true, failed);
+}
+
+function createForm() {
+  const n = state.pendAdd.size + state.pendRem.size;
+  if (!state.creating)
+    return h("button", { class: "act", disabled: !!state.snap.read_only || state.busy || n > 0,
+      title: n ? "Apply or revert the pending changes first" : "", onclick: () => {
+        state.creating = true; render(); const i = document.getElementById("newName"); if (i) i.focus(); } },
+      "New collection…");
+  return h("span", { class: "newcol" },
+    h("input", { id: "newName", type: "text", maxlength: 100, placeholder: "New collection name", "aria-label": "New collection name",
+      value: state.newName, oninput: (ev) => { state.newName = ev.target.value; },
+      onkeydown: (ev) => { if (ev.key === "Enter") doCreate(); else if (ev.key === "Escape") { state.creating = false; render(); } } }),
+    h("button", { class: "act primary", disabled: state.busy, onclick: doCreate }, state.busy ? "Creating…" : "Create"),
+    h("button", { class: "act", disabled: state.busy, onclick: () => { state.creating = false; state.newName = ""; render(); } }, "Cancel"));
+}
+
 function resultBanner() {
   const r = state.result;
   if (!r) return "";
+  if (r.created) return r.verified === false
+    ? h("div", { class: "banner bad" }, `Jellyfin accepted "${r.name}" but it does not show up in the collection list yet. Press Refresh.`)
+    : h("div", { class: "banner ok" }, `Created the empty collection "${r.name}". Add shows to it below.`);
   const parts = [`${r.added.length} added, ${r.removed.length} removed in "${r.collection}".`];
   const skipped = r.skipped_add.length + r.skipped_remove.length;
   if (skipped) parts.push(`${skipped} change(s) skipped because Jellyfin already had them in that state.`);
@@ -415,6 +458,8 @@ function updateEditor() {
   const banner = resultBanner();
   ed.result.replaceChildren(banner || "");
   ed.pending.replaceChildren(...pendingBar());
+  if (ed.newBox && !(state.creating && document.activeElement && document.activeElement.id === "newName"))
+    ed.newBox.replaceChildren(createForm());
   if (state.confirming) ed.pending.scrollIntoView({ block: "nearest" });
 }
 
@@ -422,7 +467,7 @@ function renderEditor() {
   ed = {};
   const cols = state.snap.collections;
   if (!cols.length)
-    return [h("p", { class: "muted" }, "There are no collections yet. Create one in Jellyfin first; creating collections here is a planned next step.")];
+    return [h("div", { class: "bar" }, createForm()), h("p", { class: "muted" }, "There are no collections yet. Create the first one above.")];
 
   const select = h("select", { "aria-label": "Collection", onchange: onPickCollection },
     cols.map(c => h("option", { value: c.id }, c.name + (c.managed ? " (managed, read-only)" : ""))));
@@ -445,11 +490,12 @@ function renderEditor() {
   ed.ulL = mkList("L", "Shows not in the collection"); ed.ulR = mkList("R", "Shows in the collection");
   ed.btnAdd = h("button", { class: "act mv", onclick: () => moveSelected("L") }, "Add →");
   ed.btnRem = h("button", { class: "act mv", onclick: () => moveSelected("R") }, "← Remove");
+  ed.newBox = h("span", {}, createForm());
   ed.note = h("div"); ed.result = h("div"); ed.pending = h("div", { class: "pending" });
 
   return [
     h("div", { class: "bar" }, h("label", {}, "Collection", select), ...libBoxes,
-      h("button", { class: "act", onclick: () => load(true) }, "Refresh")),
+      h("button", { class: "act", onclick: () => load(true) }, "Refresh"), ed.newBox),
     ed.note, ed.result,
     h("div", { class: "dual" },
       side("qL", ed.hL, ed.ulL),
