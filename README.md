@@ -40,10 +40,14 @@ proxy's authentication and do not expose the port outside your network. Change r
   **Add →** / **← Remove**. Moves are only staged on screen; **Apply…** shows exactly what will change, and after you
   confirm, the app re-reads the collection from Jellyfin and tells you whether every change is really there.
   Chips show each show's other collections. Collections owned by the Auto Collections plugin are read-only.
+- **Shows / Movies switch** (top right, shown when you have a movie library): every tab works on one kind at a time.
+  A collection can hold both, so the same collection stays selected when you switch, staged changes carry over, and one
+  Apply can add or remove shows and movies together. Libraries are read from Jellyfin: TV libraries appear in Shows
+  mode, movie libraries in Movies mode, and mixed-content libraries in both.
 - **New collection…** (Editor tab): type a name and Create. It makes an empty collection, switches the editor to it,
   and confirms Jellyfin lists it. Duplicate names and names owned by Auto Collections rules are refused.
 - **Shows**: every show with its collections as chips. Orange chips are collections owned by the Auto Collections plugin.
-- **Uncollected**: shows in no collection. By default shows that are only in plugin-managed collections are counted as uncollected (toggle on the page).
+- **Uncollected**: shows (or movies) in no collection. By default shows that are only in plugin-managed collections are counted as uncollected (toggle on the page).
 - **Collections**: each collection with its member shows.
 - **Self-check**: tests the Jellyfin calls the app relies on.
 
@@ -60,8 +64,9 @@ Checked on a real Jellyfin 12.1.0 server (the author's):
 - Adding and removing shows with comma-separated `ids` works, for one show and for several at once.
 - Removing the last show from a collection leaves the empty collection in place.
 
-Not yet tried on a real 12.1 server: **New collection…** (creating a collection with no shows in it). Try it with a
-throwaway name first; if Jellyfin refuses, the app shows its error.
+Creating an empty collection with **New collection…** works on a real 12.1 server.
+
+Not yet tried on a real server: **Movies mode** (`includeItemTypes=Movie`). Run the Self-check first; it samples movies too.
 
 Still not seen: the shape of Auto Collections `ExpressionCollections` entries (only the empty list has been
 seen). If you use expression-based collections, check that they show up as managed (orange) before editing them.

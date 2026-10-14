@@ -6,7 +6,10 @@ import time
 
 from .jellyfin import HEX32, CollectionWriter, JellyfinError, JellyfinReader, nid, valid_collection_name
 
-SHOW_LIBRARY_TYPES = {"tvshows", "mixed", ""}
+# Which kinds of title each Jellyfin library type can hold. Mixed-content libraries
+# report an empty type, so they count as both. Music, photos, etc. are not listed.
+LIBRARY_KINDS = {"tvshows": ["show"], "movies": ["movie"], "mixed": ["show", "movie"], "": ["show", "movie"]}
+MEMBER_KINDS = {"Series": "show", "Movie": "movie"}
 
 
 class ApplyError(Exception):
@@ -65,26 +68,31 @@ class Service:
             ctype = lib.get("CollectionType") or ""
             if ctype == "boxsets":
                 continue
+            kinds = LIBRARY_KINDS.get(ctype, [])
             libraries.append({
                 "id": nid(lib["ItemId"]),
                 "name": lib.get("Name", "?"),
                 "type": ctype,
-                "is_show_library": ctype in SHOW_LIBRARY_TYPES,
+                "kinds": kinds,
+                "is_show_library": "show" in kinds,
+                "is_movie_library": "movie" in kinds,
             })
 
-        shows: dict[str, dict] = {}
+        by_kind: dict[str, dict[str, dict]] = {"show": {}, "movie": {}}
         for lib in libraries:
-            if not lib["is_show_library"]:
-                continue
-            for item in await r.series(lib["id"]):
-                sid = nid(item["Id"])
-                show = shows.setdefault(sid, {
-                    "id": sid, "name": item.get("Name", "?"),
-                    "year": item.get("ProductionYear"),
-                    "library_ids": [], "collection_ids": [],
-                })
-                if lib["id"] not in show["library_ids"]:
-                    show["library_ids"].append(lib["id"])
+            for kind in lib["kinds"]:
+                fetch = r.series if kind == "show" else r.movies
+                for item in await fetch(lib["id"]):
+                    sid = nid(item["Id"])
+                    rec = by_kind[kind].setdefault(sid, {
+                        "id": sid, "name": item.get("Name", "?"), "kind": kind,
+                        "year": item.get("ProductionYear"),
+                        "library_ids": [], "collection_ids": [],
+                    })
+                    if lib["id"] not in rec["library_ids"]:
+                        rec["library_ids"].append(lib["id"])
+        shows, movies = by_kind["show"], by_kind["movie"]
+        titles = {**shows, **movies}
 
         try:
             managed = _managed_names(await r.autocollections_export())
@@ -105,30 +113,33 @@ class Service:
         collections = []
         for c, members in zip(collections_raw, member_lists):
             cid = nid(c["Id"])
-            series_members = []
+            title_members = []
             other = 0
             for m in members:
-                if m.get("Type") == "Series":
+                kind = MEMBER_KINDS.get(m.get("Type"))
+                if kind:
                     mid = nid(m["Id"])
-                    series_members.append({"id": mid, "name": m.get("Name", "?"),
-                                           "year": m.get("ProductionYear")})
-                    if mid in shows:
-                        shows[mid]["collection_ids"].append(cid)
+                    title_members.append({"id": mid, "name": m.get("Name", "?"), "kind": kind,
+                                          "year": m.get("ProductionYear")})
+                    if mid in titles:
+                        titles[mid]["collection_ids"].append(cid)
                 else:
                     other += 1
-            series_members.sort(key=lambda s: s["name"].lower())
+            title_members.sort(key=lambda s: s["name"].lower())
             collections.append({
                 "id": cid, "name": c.get("Name", "?"),
                 "managed": c.get("Name", "").strip().lower() in managed,
-                "members": series_members, "other_count": other,
+                "members": title_members, "other_count": other,
             })
         collections.sort(key=lambda c: c["name"].lower())
 
         managed_ids = {c["id"] for c in collections if c["managed"]}
         show_list = sorted(shows.values(), key=lambda s: s["name"].lower())
-        uncollected = [s["id"] for s in show_list if not s["collection_ids"]]
+        movie_list = sorted(movies.values(), key=lambda s: s["name"].lower())
+        everything = show_list + movie_list
+        uncollected = [s["id"] for s in everything if not s["collection_ids"]]
         uncollected_ignoring_managed = [
-            s["id"] for s in show_list
+            s["id"] for s in everything
             if not [cid for cid in s["collection_ids"] if cid not in managed_ids]
         ]
 
@@ -141,6 +152,7 @@ class Service:
             "libraries": libraries,
             "collections": collections,
             "shows": show_list,
+            "movies": movie_list,
             "uncollected_ids": uncollected,
             "uncollected_ids_ignoring_managed": uncollected_ignoring_managed,
             "warnings": warnings,
@@ -199,10 +211,10 @@ class Service:
             raise ApplyError("Invalid collection id.")
         bad = [i for i in add + remove if not HEX32.match(i)]
         if bad:
-            raise ApplyError("Invalid show id in request.")
+            raise ApplyError("Invalid item id in request.")
         add_set, remove_set = set(add), set(remove)
         if add_set & remove_set:
-            raise ApplyError("A show cannot be both added and removed in one request.")
+            raise ApplyError("An item cannot be both added and removed in one request.")
 
         async with self._write_lock:
             snap = await self.snapshot(force=True)
@@ -212,10 +224,10 @@ class Service:
             if col["managed"]:
                 raise ApplyError(f'"{col["name"]}" is managed by the Auto Collections plugin, '
                                  "which would undo changes made here.", 409)
-            known = {s["id"] for s in snap["shows"]}
+            known = {s["id"] for s in snap["shows"]} | {s["id"] for s in snap["movies"]}
             unknown = add_set - known
             if unknown:
-                raise ApplyError("Some shows to add were not found in any show library; refresh.")
+                raise ApplyError("Some items to add were not found in any show or movie library; refresh.")
 
             members = {m["id"] for m in col["members"]}
             to_add = sorted(add_set - members)
@@ -253,7 +265,7 @@ class Service:
             result["applied"] = True
             fresh = await self.snapshot(force=True)
             fresh_col = next((c for c in fresh["collections"] if c["id"] == collection_id), None)
-            names = {s["id"]: s["name"] for s in fresh["shows"]}
+            names = {s["id"]: s["name"] for s in fresh["shows"] + fresh["movies"]}
             fresh_members = {m["id"] for m in fresh_col["members"]} if fresh_col else set()
             mismatches = []
             for sid in to_add:
@@ -290,19 +302,22 @@ class Service:
         except JellyfinError as exc:
             add("API key and library snapshot", "fail", str(exc))
             return checks
-        shows, cols = snap["shows"], snap["collections"]
-        show_libs = [x for x in snap["libraries"] if x["is_show_library"]]
+        shows, movies, cols = snap["shows"], snap["movies"], snap["collections"]
+        title_libs = [x for x in snap["libraries"] if x["kinds"]]
         add("API key and library snapshot", "pass",
-            f"{len(show_libs)} show libraries, {len(shows)} shows, {len(cols)} collections")
-        if not show_libs:
-            add("Show libraries found", "warn", "No library of type tvshows/mixed was listed.")
+            f"{len(title_libs)} show/movie libraries, {len(shows)} shows, {len(movies)} movies, "
+            f"{len(cols)} collections")
+        if not title_libs:
+            add("Show or movie libraries found", "warn",
+                "No library of type tvshows, movies or mixed was listed.")
         for w in snap["warnings"]:
             add("Auto Collections export", "warn", w)
 
-        if shows:
-            with_year = sum(1 for s in shows if s["year"])
-            add("Show years present", "pass" if with_year else "warn",
-                f"{with_year} of {len(shows)} shows have a production year")
+        titles = shows + movies
+        if titles:
+            with_year = sum(1 for s in titles if s["year"])
+            add("Production years present", "pass" if with_year else "warn",
+                f"{with_year} of {len(titles)} shows and movies have a production year")
 
         if cols and not any(c["members"] or c["other_count"] for c in cols):
             add("Collection members readable", "warn",
@@ -310,13 +325,13 @@ class Service:
                 "The member lookup may work differently in 12.1.")
         elif cols:
             add("Collection members readable", "pass",
-                f"{sum(len(c['members']) for c in cols)} show memberships across {len(cols)} collections")
+                f"{sum(len(c['members']) for c in cols)} show/movie memberships across {len(cols)} collections")
 
-        collected = [s for s in shows if s["collection_ids"]]
-        uncollected = [s for s in shows if not s["collection_ids"]]
+        collected = [s for s in titles if s["collection_ids"]]
+        uncollected = [s for s in titles if not s["collection_ids"]]
         picks = collected[: sample // 2 + sample % 2] + uncollected[: sample // 2]
         if not picks:
-            add("Native per-show lookup cross-check", "warn", "No shows available to sample.")
+            add("Native per-show lookup cross-check", "warn", "No shows or movies available to sample.")
             return checks
 
         mismatches, errors = [], []
@@ -335,9 +350,9 @@ class Service:
                 "Relying on the inverted collection member lists only.")
         elif mismatches:
             add("Native per-show lookup cross-check", "fail",
-                f"{len(mismatches)} of {len(picks)} sampled shows disagree. "
+                f"{len(mismatches)} of {len(picks)} sampled titles disagree. "
                 + " | ".join(mismatches[:5]))
         else:
             add("Native per-show lookup cross-check", "pass",
-                f"{len(picks)} sampled shows agree between the member lists and /Items/{{id}}/Collections")
+                f"{len(picks)} sampled titles agree between the member lists and /Items/{{id}}/Collections")
         return checks

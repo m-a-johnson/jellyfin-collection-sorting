@@ -29,6 +29,9 @@
   owns are refused. The only delete endpoint seen in the 12.1 spec is `DELETE /Items`, described as deleting from the
   library *and filesystem*. Whether that spares media when the item is a collection is unverified, and a wrong guess
   could destroy files, so collections are deleted in Jellyfin's own UI for now.
-- **Still unverified:** whether Jellyfin 12.1 accepts `POST /Collections` with no `ids` (the mock does; try it on a
-  throwaway name first). The error from Jellyfin is shown if it refuses.
+- **Movies are a mode, not a mixed list.** Show and movie titles can collide, and a collection may hold both, so a
+  Shows/Movies switch scopes every tab while staged changes and the selected collection carry across it. Library kinds
+  come from the Jellyfin library type (tvshows, movies; mixed or untyped counts as both). Music and other types are ignored.
+- **Verified on a real server:** `POST /Collections` with no `ids` creates an empty collection on 12.1.
+- **Unverified for movies:** `includeItemTypes=Movie` on a real server (the self-check now samples movies too).
 - **Still unverified:** the shape of Auto Collections `ExpressionCollections` entries (only an empty list has been seen).

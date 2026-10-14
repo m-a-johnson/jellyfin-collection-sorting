@@ -156,12 +156,18 @@ class JellyfinReader:
         data = await self._get("/Library/VirtualFolders")
         return data if isinstance(data, list) else []
 
-    async def series(self, library_id: str | None = None) -> list[dict]:
-        params = {"includeItemTypes": "Series", "recursive": "true",
+    async def _titles(self, item_type: str, library_id: str | None) -> list[dict]:
+        params = {"includeItemTypes": item_type, "recursive": "true",
                   "sortBy": "SortName", "sortOrder": "Ascending"}
         if library_id:
             params["parentId"] = library_id
         return await self._items(params)
+
+    async def series(self, library_id: str | None = None) -> list[dict]:
+        return await self._titles("Series", library_id)
+
+    async def movies(self, library_id: str | None = None) -> list[dict]:
+        return await self._titles("Movie", library_id)
 
     async def collections(self) -> list[dict]:
         return await self._items({"includeItemTypes": "BoxSet", "recursive": "true"})

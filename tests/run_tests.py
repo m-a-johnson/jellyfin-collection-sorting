@@ -117,7 +117,21 @@ def happy_path():
         check("collections sorted", [c["name"] for c in s["collections"]] ==
               ["Empty Test", "ETV Discovery", "Evening Lineup", "Star Wars Collection"], str(list(cols)))
         etv = cols["ETV Discovery"]
-        check("ETV has 3 series and 1 other item", len(etv["members"]) == 3 and etv["other_count"] == 1, str(etv))
+        check("ETV has 3 shows and 1 movie, no unknown items",
+              [m["kind"] for m in etv["members"]].count("show") == 3 and [m["kind"] for m in etv["members"]].count("movie") == 1
+              and etv["other_count"] == 0, str(etv))
+        check("movie libraries and kinds reported",
+              [(l["name"], l["kinds"]) for l in s["libraries"]] ==
+              [("Kids Shows", ["show"]), ("Adult Shows", ["show"]), ("Movies", ["movie"])], str(s["libraries"]))
+        check("4 movies found", sorted(m["name"] for m in s["movies"]) == ["Encanto", "Moana", "Paddington", "Some Movie"]
+              and all(m["kind"] == "movie" for m in s["movies"]), str(s["movies"]))
+        check("movie collection membership tracked",
+              next(m for m in s["movies"] if m["name"] == "Some Movie")["collection_ids"] == [etv["id"]])
+        check("uncollected includes movies", {m["name"] for m in s["movies"] if m["id"] in set(s["uncollected_ids"])}
+              == {"Moana", "Encanto", "Paddington"})
+        from app.service import LIBRARY_KINDS
+        check("mixed and untyped libraries hold both kinds", LIBRARY_KINDS["mixed"] == LIBRARY_KINDS[""] == ["show", "movie"]
+              and "musicvideos" not in LIBRARY_KINDS and "music" not in LIBRARY_KINDS)
         check("only Star Wars flagged managed", [n for n, c in cols.items() if c["managed"]] == ["Star Wars Collection"])
         by_name = {(x["name"], x["year"]): x for x in s["shows"]}
         octo = by_name[("Octonauts", 2010)]
@@ -132,7 +146,7 @@ def happy_path():
         sc = httpx.get(f"{base}/api/selfcheck").json()["checks"]
         bad = [c for c in sc if c["status"] != "pass"]
         check("self-check all pass", not bad, str(bad))
-        check("native cross-check ran on 9 shows", any("9 sampled shows agree" in c["detail"] for c in sc), str(sc))
+        check("native cross-check sampled 12 titles", any("12 sampled titles agree" in c["detail"] for c in sc), str(sc))
         page = httpx.get(f"{base}/")
         check("frontend served", page.status_code == 200 and "Collection Manager" in page.text)
     finally:
@@ -201,6 +215,7 @@ def sid(n: int) -> str:          # show ids used by the mock
 
 
 BLUEY, OCTONAUTS, WILD_KRATTS, REBOOT_94, DANIEL_TIGER = sid(1), sid(2), sid(3), sid(4), sid(7)
+MOVIE_SOME, MOANA, ENCANTO = [("c%02d" % n).ljust(32, "0") for n in (1, 2, 3)]
 
 
 def mock_log() -> list:
@@ -296,7 +311,7 @@ def editor_flow():
               [("POST", f"/Collections/{etv}/Items", [BLUEY]), ("DELETE", f"/Collections/{etv}/Items", [WILD_KRATTS])], str(log))
         check("DELETE /Items was never called", not any(e.get("FORBIDDEN") for e in log))
 
-        check("ETV membership updated", members("ETV Discovery") == {OCTONAUTS, REBOOT_94, BLUEY}, str(members("ETV Discovery")))
+        check("ETV membership updated", members("ETV Discovery") == {OCTONAUTS, REBOOT_94, BLUEY, MOVIE_SOME}, str(members("ETV Discovery")))
         snap = httpx.get(f"{base}/api/snapshot").json()
         unc = {x["id"] for x in snap["shows"] if x["id"] in set(snap["uncollected_ids"])}
         check("Wild Kratts now uncollected, Bluey no longer", WILD_KRATTS in unc and BLUEY not in unc, str(unc))
@@ -361,6 +376,24 @@ def editor_server_rejects_ids():
         err = r.json().get("error", "")
         check("surfaced as 502 with Jellyfin's status", r.status_code == 502 and "HTTP 400" in err and "0 of 2 added" in err, r.text)
         check("nothing changed", not ({BLUEY, DANIEL_TIGER} & members("ETV Discovery")))
+    finally:
+        stop(app, mock)
+
+
+def movies_flow():
+    print("movies: add and remove movies together with a show")
+    mock, app = scenario({})
+    try:
+        evening = col_ids()["Evening Lineup"]
+        r = apply(evening, add=[MOANA, ENCANTO, BLUEY])
+        check("mixed add accepted and verified", r.status_code == 200 and r.json()["verified"] and len(r.json()["added"]) == 3, r.text)
+        check("membership includes movies and show", {MOANA, ENCANTO, BLUEY} <= members("Evening Lineup"))
+        r = apply(evening, remove=[MOANA])
+        check("movie removed", r.status_code == 200 and MOANA not in members("Evening Lineup") and ENCANTO in members("Evening Lineup"), r.text)
+        check("unknown movie id refused", apply(evening, add=["c99".ljust(32, "0")]).status_code == 400)
+        log = mock_log()
+        check("only collection-scoped writes, no DELETE /Items",
+              all(e["path"] == f"/Collections/{evening}/Items" for e in log) and not any(e.get("FORBIDDEN") for e in log), str(log))
     finally:
         stop(app, mock)
 
@@ -448,6 +481,7 @@ if __name__ == "__main__":
     editor_partial_failure()
     editor_server_rejects_ids()
     editor_read_only()
+    movies_flow()
     create_flow()
     print(f"\n{'ALL PASSED' if not failures else str(failures) + ' FAILED'}")
     sys.exit(1 if failures else 0)
