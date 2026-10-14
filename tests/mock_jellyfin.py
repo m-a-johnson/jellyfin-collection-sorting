@@ -49,8 +49,13 @@ SERIES = [
     series(7, "Daniel Tiger", 2012, KIDS), series(8, "Severance", 2022, ADULT),
     series(9, "Andor", 2022, ADULT),
 ]
-MOVIE = {"Id": hid("c", 1), "Name": "Some Movie", "ProductionYear": 2001, "Type": "Movie"}
-BY_ID = {s["Id"]: s for s in SERIES}
+def movie(n, name, year):
+    return {"Id": hid("c", n), "Name": name, "ProductionYear": year, "Type": "Movie", "lib": MOVIES}
+
+
+MOVIE = movie(1, "Some Movie", 2001)
+MOVIE_LIST = [MOVIE, movie(2, "Moana", 2016), movie(3, "Encanto", 2021), movie(4, "Paddington", 2014)]
+BY_ID = {s["Id"]: s for s in SERIES + MOVIE_LIST}
 
 
 def box(n, name, members):
@@ -101,6 +106,8 @@ def items(request: Request):
         rows = box_match["members"]
     elif types == "Series":
         rows = [s for s in SERIES if not parent or s["lib"] == parent]
+    elif types == "Movie":
+        rows = [m for m in MOVIE_LIST if not parent or m["lib"] == parent]
     elif types == "BoxSet":
         rows = BOXSETS
     else:

@@ -76,6 +76,7 @@
     .dual { grid-template-columns:1fr; }
     .mid { flex-direction:row; justify-content:center; }
   }
+  .kindsw { margin-left:auto; display:flex; gap:4px; align-items:center; padding-bottom:4px; }
   .newcol { display: inline-flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
   .newcol input { min-width: 12rem; }
 </style>
@@ -114,9 +115,20 @@ const state = {
   snap: null, tab: "editor", libs: new Set(), query: "", ignoreManaged: true, checks: null,
   editCol: null, pendAdd: new Set(), pendRem: new Set(), selL: new Set(), selR: new Set(),
   lastL: null, lastR: null, qL: "", qR: "", confirming: false, busy: false, result: null,
-  creating: false, newName: "",
+  creating: false, newName: "", kind: "show",
 };
 let ed = {};   // handles to the editor's DOM nodes, rebuilt whenever the editor tab renders
+const KINDS = { show: { many: "shows", Many: "Shows" }, movie: { many: "movies", Many: "Movies" } };
+const kw = () => KINDS[state.kind];
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const catalog = () => state.kind === "movie" ? state.snap.movies : state.snap.shows;
+const kindLibs = () => state.snap.libraries.filter(l => l.kinds.includes(state.kind));
+const hasMovies = () => !!state.snap && state.snap.libraries.some(l => l.kinds.includes("movie"));
+function setKind(k) {
+  if (state.kind === k) return;
+  state.kind = k; state.selL.clear(); state.selR.clear(); state.lastL = state.lastR = null;
+  state.confirming = false; state.creating = false; render();
+}
 const TABS = [["editor", "Editor"], ["shows", "Shows"], ["uncollected", "Uncollected"],
               ["collections", "Collections"], ["check", "Self-check"]];
 
@@ -135,7 +147,7 @@ async function load(refresh, keepMsg) {
   if (!keepMsg) setMsg("");
   try {
     state.snap = await api("/api/snapshot" + (refresh ? "?refresh=true" : ""));
-    if (!state.libs.size) state.snap.libraries.filter(l => l.is_show_library).forEach(l => state.libs.add(l.id));
+    if (!state.libs.size) state.snap.libraries.filter(l => l.kinds.length).forEach(l => state.libs.add(l.id));
     ensureEditCol();
     prunePending();
     const s = state.snap.server;
@@ -173,21 +185,27 @@ function lockReason() {
 function visibleShows(ids) {
   const q = state.query.trim().toLowerCase();
   const idSet = ids ? new Set(ids) : null;
-  return state.snap.shows.filter(s =>
+  return catalog().filter(s =>
     (!idSet || idSet.has(s.id)) &&
     s.library_ids.some(id => state.libs.has(id)) &&
     (!q || s.name.toLowerCase().includes(q)));
 }
 
 function renderTabs() {
+  const sw = state.snap && hasMovies()
+    ? [h("span", { class: "kindsw", role: "group", "aria-label": "Titles to work on" },
+        ...["show", "movie"].map(k => h("button", { class: "act" + (state.kind === k ? " primary" : ""),
+          "aria-pressed": state.kind === k ? "true" : "false", onclick: () => setKind(k) }, KINDS[k].Many)))]
+    : [];
   document.getElementById("tabs").replaceChildren(...TABS.map(([id, name]) =>
-    h("button", { class: state.tab === id ? "on" : "", onclick: () => { state.tab = id; render(); } }, name)));
+    h("button", { class: state.tab === id ? "on" : "", onclick: () => { state.tab = id; render(); } },
+      id === "shows" && state.snap ? kw().Many : name)), ...sw);
 }
 
 function renderFilters() {
   const bar = document.getElementById("filters");
   if (!state.snap || ["collections", "check", "editor"].includes(state.tab)) { bar.replaceChildren(); return; }
-  const libs = state.snap.libraries.filter(l => l.is_show_library).map(l =>
+  const libs = kindLibs().map(l =>
     h("label", {}, h("input", { type: "checkbox", checked: state.libs.has(l.id), onchange: (ev) => {
       ev.target.checked ? state.libs.add(l.id) : state.libs.delete(l.id); renderView(); } }), l.name));
   const search = h("input", { type: "search", placeholder: "Filter by title", value: state.query,
@@ -204,7 +222,7 @@ function renderFilters() {
 
 function renderShows() {
   const cols = colMap(), rows = visibleShows();
-  return [h("div", { class: "muted" }, `${rows.length} shows`),
+  return [h("div", { class: "muted" }, `${rows.length} ${kw().many}`),
     h("ul", { class: "rows" }, rows.map(s => h("li", {},
       h("span", { class: "title" }, label(s)),
       s.collection_ids.length ? s.collection_ids.map(id => cols.get(id)).filter(Boolean).map(c =>
@@ -215,18 +233,23 @@ function renderShows() {
 function renderUncollected() {
   const ids = state.ignoreManaged ? state.snap.uncollected_ids_ignoring_managed : state.snap.uncollected_ids;
   const rows = visibleShows(ids);
-  return [h("div", { class: "muted" }, `${rows.length} shows in no collection` +
-      (state.ignoreManaged ? " (shows only in plugin-managed collections are included)" : "")),
+  return [h("div", { class: "muted" }, `${rows.length} ${kw().many} in no collection` +
+      (state.ignoreManaged ? ` (${kw().many} only in plugin-managed collections are included)` : "")),
     h("ul", { class: "rows" }, rows.map(s => h("li", {}, h("span", { class: "title" }, label(s)))))];
 }
 
 function renderCollections() {
   return [h("div", { class: "muted bar" }, `${state.snap.collections.length} collections`),
     ...state.snap.collections.map(c => h("details", {},
-      h("summary", {}, c.name, h("span", { class: "muted" }, ` · ${c.members.length} shows`),
+      h("summary", {}, c.name, h("span", { class: "muted" }, ` · ${countKinds(c)}`),
         c.other_count ? h("span", { class: "muted" }, ` · ${c.other_count} other items`) : null,
         c.managed ? h("span", { class: "badge" }, "managed by Auto Collections") : null),
-      h("ul", {}, c.members.map(m => h("li", {}, label(m))))))];
+      h("ul", {}, c.members.map(m => h("li", {}, label(m),
+        m.kind === "movie" ? h("span", { class: "chip" }, "movie") : null)))))];
+}
+function countKinds(c) {
+  const n = (k) => c.members.filter(m => m.kind === k).length;
+  return [plural(n("show"), "show", "shows"), n("movie") ? plural(n("movie"), "movie", "movies") : null].filter(Boolean).join(", ");
 }
 
 function renderCheck() {
@@ -248,22 +271,23 @@ function info() {
   const m = new Map();
   for (const c of state.snap.collections)
     for (const x of c.members)
-      if (!m.has(x.id)) m.set(x.id, { id: x.id, name: x.name, year: x.year, library_ids: [], collection_ids: [] });
-  for (const s of state.snap.shows) m.set(s.id, s);
+      if (!m.has(x.id)) m.set(x.id, { id: x.id, name: x.name, year: x.year, kind: x.kind, library_ids: [], collection_ids: [] });
+  for (const s of [...state.snap.shows, ...state.snap.movies]) m.set(s.id, s);
   return m;
 }
 
 // What the two lists show once staged changes are applied on screen.
 function lists() {
   const col = currentCol(), inf = info();
-  const base = new Set(col.members.map(m => m.id));
+  const mine = (id) => { const t = inf.get(id); return t && t.kind === state.kind; };
+  const base = new Set(col.members.filter(m => m.kind === state.kind).map(m => m.id));
   const right = new Set([...base].filter(id => !state.pendRem.has(id)));
-  state.pendAdd.forEach(id => right.add(id));
+  state.pendAdd.forEach(id => { if (mine(id)) right.add(id); });
   const ql = state.qL.trim().toLowerCase(), qr = state.qR.trim().toLowerCase();
   const leftIds = new Set();
-  for (const s of state.snap.shows)
+  for (const s of catalog())
     if (!right.has(s.id) && s.library_ids.some(l => state.libs.has(l))) leftIds.add(s.id);
-  state.pendRem.forEach(id => { if (!right.has(id)) leftIds.add(id); });   // always allow undoing a removal
+  state.pendRem.forEach(id => { if (mine(id) && !right.has(id)) leftIds.add(id); });   // always allow undoing a removal
   const pick = (ids, q) => [...ids].map(id => inf.get(id)).filter(Boolean)
     .filter(s => !q || s.name.toLowerCase().includes(q)).sort(byName);
   return { left: pick(leftIds, ql), right: pick(right, qr) };
@@ -428,7 +452,8 @@ function pendingBar() {
   const n = state.pendAdd.size + state.pendRem.size;
   const lock = !!lockReason();
   if (state.confirming) {
-    const names = (set) => [...set].map(id => inf.get(id)).filter(Boolean).sort(byName).map(label).join(", ");
+    const names = (set) => [...set].map(id => inf.get(id)).filter(Boolean).sort(byName)
+      .map(t => label(t) + (t.kind === "movie" ? " [movie]" : "")).join(", ");
     return [h("div", { class: "review" },
       h("strong", {}, `Apply these changes to "${col.name}"?`),
       state.pendAdd.size ? h("div", {}, h("span", { class: "st pass" }, "ADD"), names(state.pendAdd)) : null,
@@ -452,9 +477,12 @@ function updateEditor() {
   ed.orderL = left.map(s => s.id); ed.orderR = right.map(s => s.id);
   fill(ed.ulL, left, "L"); fill(ed.ulR, right, "R");
   ed.hL.textContent = `Not in collection (${left.length})`;
+  const otherKind = col.members.filter(m => m.kind !== state.kind).length;
   ed.hR.textContent = `In "${col.name}" (${right.length})`;
   syncSelection();
-  ed.note.replaceChildren(lock ? h("div", { class: "warn" }, lock) : "");
+  ed.note.replaceChildren(lock ? h("div", { class: "warn" }, lock) : "",
+    otherKind ? h("div", { class: "muted small" }, `This collection also holds ${state.kind === "movie" ? plural(otherKind, "show", "shows") : plural(otherKind, "movie", "movies")}; ` +
+      `switch to ${state.kind === "movie" ? "Shows" : "Movies"} above to see or change them.`) : "");
   const banner = resultBanner();
   ed.result.replaceChildren(banner || "");
   ed.pending.replaceChildren(...pendingBar());
@@ -472,7 +500,7 @@ function renderEditor() {
   const select = h("select", { "aria-label": "Collection", onchange: onPickCollection },
     cols.map(c => h("option", { value: c.id }, c.name + (c.managed ? " (managed, read-only)" : ""))));
   select.value = state.editCol;
-  const libBoxes = state.snap.libraries.filter(l => l.is_show_library).map(l =>
+  const libBoxes = kindLibs().map(l =>
     h("label", {}, h("input", { type: "checkbox", checked: state.libs.has(l.id), onchange: (ev) => {
       ev.target.checked ? state.libs.add(l.id) : state.libs.delete(l.id); updateEditor(); } }), l.name));
 
@@ -487,7 +515,7 @@ function renderEditor() {
     return ul;
   };
   ed.hL = h("h3"); ed.hR = h("h3");
-  ed.ulL = mkList("L", "Shows not in the collection"); ed.ulR = mkList("R", "Shows in the collection");
+  ed.ulL = mkList("L", `${kw().Many} not in the collection`); ed.ulR = mkList("R", `${kw().Many} in the collection`);
   ed.btnAdd = h("button", { class: "act mv", onclick: () => moveSelected("L") }, "Add →");
   ed.btnRem = h("button", { class: "act mv", onclick: () => moveSelected("R") }, "← Remove");
   ed.newBox = h("span", {}, createForm());
@@ -502,8 +530,8 @@ function renderEditor() {
       h("div", { class: "mid" }, ed.btnAdd, ed.btnRem),
       side("qR", ed.hR, ed.ulR)),
     ed.pending,
-    h("p", { class: "muted small" }, "Click a show to select it (click again to deselect), Shift-click for a range, double-click or Enter to move one. " +
-      "Moves are only staged; nothing changes in Jellyfin until you apply. Chips show the show's other collections."),
+    h("p", { class: "muted small" }, `Click a ${state.kind} to select it (click again to deselect), Shift-click for a range, double-click or Enter to move one. ` +
+      "Moves are only staged; nothing changes in Jellyfin until you apply. Chips show each title's other collections."),
   ];
 }
 
