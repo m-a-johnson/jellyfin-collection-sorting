@@ -20,6 +20,10 @@
   because the plugin may re-add or remove items on its next run.
 - **config.yml with environment overrides**, API key as a quoted string (an unquoted numeric key is rejected).
 - **No database, no image fetching.** Jellyfin is the source of truth; titles and years only.
+- **Per-item editing is one server call, validated up front.** `POST /api/items/{id}/collections` checks every named
+  collection against a fresh read (missing or plugin-managed collections refuse the whole request before any write),
+  skips no-ops, writes one collection at a time, stops at the first failure and reports what already went through,
+  then re-reads to verify. Bulk add from the Uncollected tab reuses the existing apply endpoint.
 - **Verified on a real 12.1.0 server:** the self-check calls (server info, library list, show years, collection
   members, per-show lookup), comma-separated `ids` on collection writes (one and several shows), and that removing a
   collection's last item leaves the collection. Collection-member and per-show lookups need `user_id` set; without

@@ -46,8 +46,10 @@ proxy's authentication and do not expose the port outside your network. Change r
   mode, movie libraries in Movies mode, and mixed-content libraries in both.
 - **New collection…** (Editor tab): type a name and Create. It makes an empty collection, switches the editor to it,
   and confirms Jellyfin lists it. Duplicate names and names owned by Auto Collections rules are refused.
-- **Shows**: every show with its collections as chips. Orange chips are collections owned by the Auto Collections plugin.
-- **Uncollected**: shows (or movies) in no collection. By default shows that are only in plugin-managed collections are counted as uncollected (toggle on the page).
+- **Shows**: every show (or movie) with its collections as chips. Orange chips are collections owned by the Auto Collections plugin.
+  **Edit collections** on a row opens a checkbox per collection; tick or untick, then Apply… and Confirm. Plugin-managed
+  collections are shown but disabled.
+- **Uncollected**: shows (or movies) in no collection. Tick some (or Select all), choose a collection, and **Add to collection…**; you confirm a list first. Only titles you can see are added. By default shows that are only in plugin-managed collections are counted as uncollected (toggle on the page).
 - **Collections**: each collection with its member shows.
 - **Self-check**: tests the Jellyfin calls the app relies on.
 

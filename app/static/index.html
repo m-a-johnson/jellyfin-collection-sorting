@@ -77,6 +77,13 @@
     .mid { flex-direction:row; justify-content:center; }
   }
   .kindsw { margin-left:auto; display:flex; gap:4px; align-items:center; padding-bottom:4px; }
+  .ok { color:var(--pass); padding:12px 0; }
+  .selrow { display:inline-flex; gap:8px; align-items:baseline; cursor:pointer; }
+  .editpanel { flex-basis:100%; border:1px solid var(--line); border-radius:8px; padding:10px 12px; display:grid; gap:10px; }
+  .cols { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:4px 14px; max-height:220px; overflow:auto; }
+  .cols label { display:inline-flex; gap:6px; align-items:baseline; cursor:pointer; }
+  .cols label.managed { cursor:not-allowed; color:var(--auto); }
+  .row-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .newcol { display: inline-flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
   .newcol input { min-width: 12rem; }
 </style>
@@ -116,6 +123,7 @@ const state = {
   editCol: null, pendAdd: new Set(), pendRem: new Set(), selL: new Set(), selR: new Set(),
   lastL: null, lastR: null, qL: "", qR: "", confirming: false, busy: false, result: null,
   creating: false, newName: "", kind: "show",
+  ucSel: new Set(), ucTarget: "", ucConfirm: false, itemEdit: null, itemSet: new Set(), itemConfirm: false,
 };
 let ed = {};   // handles to the editor's DOM nodes, rebuilt whenever the editor tab renders
 const KINDS = { show: { many: "shows", Many: "Shows" }, movie: { many: "movies", Many: "Movies" } };
@@ -127,13 +135,24 @@ const hasMovies = () => !!state.snap && state.snap.libraries.some(l => l.kinds.i
 function setKind(k) {
   if (state.kind === k) return;
   state.kind = k; state.selL.clear(); state.selR.clear(); state.lastL = state.lastR = null;
-  state.confirming = false; state.creating = false; render();
+  state.confirming = false; state.creating = false;
+  state.ucSel.clear(); state.ucConfirm = false; state.itemEdit = null; state.itemConfirm = false; render();
 }
 const TABS = [["editor", "Editor"], ["shows", "Shows"], ["uncollected", "Uncollected"],
               ["collections", "Collections"], ["check", "Self-check"]];
 
 async function api(path) {
   const resp = await fetch(path);
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+  return body;
+}
+async function postJson(path, payload) {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Requested-With": "jf-collections" },
+    body: JSON.stringify(payload),
+  });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
   return body;
@@ -222,20 +241,120 @@ function renderFilters() {
 
 function renderShows() {
   const cols = colMap(), rows = visibleShows();
+  const ro = !!state.snap.read_only;
   return [h("div", { class: "muted" }, `${rows.length} ${kw().many}`),
     h("ul", { class: "rows" }, rows.map(s => h("li", {},
       h("span", { class: "title" }, label(s)),
       s.collection_ids.length ? s.collection_ids.map(id => cols.get(id)).filter(Boolean).map(c =>
         h("span", { class: "chip" + (c.managed ? " auto" : "") }, c.name))
-        : h("span", { class: "muted" }, "no collection"))))];
+        : h("span", { class: "muted" }, "no collection"),
+      ro ? null : h("button", { class: "act small", "aria-label": `Edit collections for ${s.name}`,
+        onclick: () => openItemEdit(s) }, state.itemEdit === s.id ? "Close" : "Edit collections"),
+      state.itemEdit === s.id ? itemPanel(s) : null)))];
+}
+
+function openItemEdit(s) {
+  if (state.itemEdit === s.id) { state.itemEdit = null; }
+  else { state.itemEdit = s.id; state.itemSet = new Set(s.collection_ids); }
+  state.itemConfirm = false; renderView();
+}
+function itemDiff(s) {
+  const orig = new Set(s.collection_ids), now = state.itemSet;
+  return { add: [...now].filter(id => !orig.has(id)), remove: [...orig].filter(id => !now.has(id)) };
+}
+function itemPanel(s) {
+  const cols = state.snap.collections, byId = colMap(), d = itemDiff(s);
+  const names = (ids) => ids.map(id => byId.get(id)).filter(Boolean).map(c => c.name).join(", ");
+  const boxes = cols.map(c => h("label", { class: c.managed ? "managed" : "",
+      title: c.managed ? "Managed by the Auto Collections plugin; change it in the plugin's rules" : "" },
+    h("input", { type: "checkbox", checked: state.itemSet.has(c.id), disabled: c.managed || state.busy,
+      onchange: (ev) => { ev.target.checked ? state.itemSet.add(c.id) : state.itemSet.delete(c.id);
+                          state.itemConfirm = false; renderView(); } }),
+    c.name + (c.managed ? " (managed)" : "")));
+  const body = state.itemConfirm
+    ? [h("div", { class: "review" }, h("strong", {}, `Apply these changes to ${label(s)}?`),
+        d.add.length ? h("div", {}, h("span", { class: "st pass" }, "ADD TO"), names(d.add)) : null,
+        d.remove.length ? h("div", {}, h("span", { class: "st fail" }, "REMOVE FROM"), names(d.remove)) : null,
+        h("div", { class: "muted small" }, "Removing it from a collection never deletes it from your library.")),
+      h("div", { class: "row-actions" },
+        h("button", { class: "act primary", disabled: state.busy, onclick: () => doItemApply(s) }, state.busy ? "Applying…" : "Confirm"),
+        h("button", { class: "act", disabled: state.busy, onclick: () => { state.itemConfirm = false; renderView(); } }, "Cancel"))]
+    : [h("div", { class: "row-actions" },
+        h("button", { class: "act primary", disabled: !(d.add.length || d.remove.length),
+          onclick: () => { state.itemConfirm = true; renderView(); } }, "Apply…"),
+        h("button", { class: "act", disabled: !(d.add.length || d.remove.length),
+          onclick: () => { state.itemSet = new Set(s.collection_ids); renderView(); } }, "Revert"),
+        h("span", { class: "muted small" }, d.add.length || d.remove.length
+          ? `Pending: +${d.add.length} −${d.remove.length}` : "No pending changes"))];
+  return h("div", { class: "editpanel" }, h("div", { class: "cols" }, boxes), ...body);
+}
+async function doItemApply(s) {
+  const d = itemDiff(s);
+  state.busy = true; setMsg(""); renderView();
+  let failed = false;
+  try {
+    const r = await postJson(`/api/items/${encodeURIComponent(s.id)}/collections`, { add_to: d.add, remove_from: d.remove });
+    const bits = [r.added_to.length ? `added to ${r.added_to.join(", ")}` : null,
+                  r.removed_from.length ? `removed from ${r.removed_from.join(", ")}` : null].filter(Boolean);
+    if (!r.applied) setMsg(`Nothing to change for ${label(s)}; Jellyfin already had it that way.`, "muted");
+    else if (r.verified) setMsg(`${label(s)}: ${bits.join("; ")}. Checked against Jellyfin: every change is there.`, "ok");
+    else setMsg(`${label(s)}: applied, but Jellyfin does not show ${r.mismatches.map(m => m.collection).join(", ")}. Refresh and check.`);
+    state.itemEdit = null; state.itemConfirm = false;
+  } catch (e) { failed = true; setMsg(`Not applied: ${e.message}`); }
+  state.busy = false;
+  await load(true, true);
 }
 
 function renderUncollected() {
   const ids = state.ignoreManaged ? state.snap.uncollected_ids_ignoring_managed : state.snap.uncollected_ids;
   const rows = visibleShows(ids);
+  const visible = new Set(rows.map(r => r.id));
+  for (const id of [...state.ucSel]) if (!visible.has(id)) state.ucSel.delete(id);   // only what you can see is acted on
+  const cols = state.snap.collections.filter(c => !c.managed);
+  if (!cols.some(c => c.id === state.ucTarget)) state.ucTarget = "";
+  const ro = !!state.snap.read_only, n = state.ucSel.size;
+  const target = cols.find(c => c.id === state.ucTarget);
+  const chosen = rows.filter(r => state.ucSel.has(r.id));
+
+  const tools = ro ? [] : [h("div", { class: "bar" },
+    h("button", { class: "act", onclick: () => { rows.forEach(r => state.ucSel.add(r.id)); state.ucConfirm = false; renderView(); } }, "Select all"),
+    h("button", { class: "act", disabled: !n, onclick: () => { state.ucSel.clear(); state.ucConfirm = false; renderView(); } }, "Clear"),
+    h("label", {}, "Add selected to",
+      h("select", { "aria-label": "Target collection", onchange: (ev) => { state.ucTarget = ev.target.value; state.ucConfirm = false; renderView(); } },
+        h("option", { value: "" }, "Choose a collection…"),
+        cols.map(c => h("option", { value: c.id, selected: c.id === state.ucTarget }, c.name)))),
+    h("button", { class: "act primary", disabled: !n || !target || state.busy,
+      onclick: () => { state.ucConfirm = true; renderView(); } }, "Add to collection…"),
+    h("span", { class: "muted small" }, `${n} selected`))];
+  const confirm = state.ucConfirm && target && n ? [h("div", { class: "pending" },
+    h("div", { class: "review" }, h("strong", {}, `Add these ${n} ${n === 1 ? "title" : "titles"} to "${target.name}"?`),
+      h("div", {}, h("span", { class: "st pass" }, "ADD"), chosen.map(label).join(", ")),
+      h("div", { class: "muted small" }, "Nothing is removed from any other collection.")),
+    h("button", { class: "act primary", disabled: state.busy, onclick: () => doBulkAdd(target, chosen) }, state.busy ? "Adding…" : "Confirm"),
+    h("button", { class: "act", disabled: state.busy, onclick: () => { state.ucConfirm = false; renderView(); } }, "Cancel"))] : [];
+
   return [h("div", { class: "muted" }, `${rows.length} ${kw().many} in no collection` +
       (state.ignoreManaged ? ` (${kw().many} only in plugin-managed collections are included)` : "")),
-    h("ul", { class: "rows" }, rows.map(s => h("li", {}, h("span", { class: "title" }, label(s)))))];
+    ...tools, ...confirm,
+    h("ul", { class: "rows" }, rows.map(s => h("li", {},
+      ro ? h("span", { class: "title" }, label(s))
+         : h("label", { class: "selrow" },
+             h("input", { type: "checkbox", checked: state.ucSel.has(s.id), "aria-label": `Select ${s.name}`,
+               onchange: (ev) => { ev.target.checked ? state.ucSel.add(s.id) : state.ucSel.delete(s.id);
+                                   state.ucConfirm = false; renderView(); } }),
+             h("span", { class: "title" }, label(s))))))];
+}
+async function doBulkAdd(target, chosen) {
+  state.busy = true; setMsg(""); renderView();
+  try {
+    const r = await postJson(`/api/collections/${encodeURIComponent(target.id)}/apply`, { add: chosen.map(c => c.id), remove: [] });
+    if (!r.applied) setMsg(`Nothing to change; those titles were already in "${r.collection}".`, "muted");
+    else if (r.verified) setMsg(`Added ${r.added.length} to "${r.collection}". Checked against Jellyfin: every change is there.`, "ok");
+    else setMsg(`Added to "${r.collection}", but Jellyfin does not show: ${r.mismatches.map(m => m.name).join(", ")}.`);
+    state.ucSel.clear(); state.ucConfirm = false;
+  } catch (e) { setMsg(`Not applied: ${e.message}`); }
+  state.busy = false;
+  await load(true, true);
 }
 
 function renderCollections() {

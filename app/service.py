@@ -278,6 +278,82 @@ class Service:
             result["verified"] = not mismatches
             return result
 
+    async def set_item_collections(self, item_id: str, add_to: list[str], remove_from: list[str],
+                                   dry_run: bool = False) -> dict:
+        """Put one show or movie into some collections and take it out of others.
+
+        Everything is validated against a fresh read before the first write, so a request
+        that names a managed or missing collection changes nothing. Writes then run one
+        collection at a time and stop at the first failure, reporting what already went through.
+        """
+        if self._read_only:
+            raise ApplyError("The app is running in read-only mode.", 403)
+        if not HEX32.match(item_id) or any(not HEX32.match(c) for c in add_to + remove_from):
+            raise ApplyError("Invalid id in request.")
+        if set(add_to) & set(remove_from):
+            raise ApplyError("A collection cannot be both added to and removed from in one request.")
+
+        async with self._write_lock:
+            snap = await self.snapshot(force=True)
+            item = next((t for t in snap["shows"] + snap["movies"] if t["id"] == item_id), None)
+            if item is None:
+                raise ApplyError("That title was not found in any show or movie library; refresh.", 404)
+            cols = {c["id"]: c for c in snap["collections"]}
+            missing = [c for c in add_to + remove_from if c not in cols]
+            if missing:
+                raise ApplyError("A collection was not found. It may have been deleted; refresh.", 404)
+            managed = [cols[c]["name"] for c in add_to + remove_from if cols[c]["managed"]]
+            if managed:
+                raise ApplyError(f'Managed by the Auto Collections plugin, which would undo changes: '
+                                 f'{", ".join(managed)}.', 409)
+
+            def has(cid: str) -> bool:
+                return any(m["id"] == item_id for m in cols[cid]["members"])
+
+            to_add = [c for c in add_to if not has(c)]
+            to_remove = [c for c in remove_from if has(c)]
+            result = {
+                "id": item_id, "name": item["name"], "dry_run": dry_run,
+                "added_to": [cols[c]["name"] for c in to_add],
+                "removed_from": [cols[c]["name"] for c in to_remove],
+                "skipped": [cols[c]["name"] for c in add_to if c not in to_add]
+                           + [cols[c]["name"] for c in remove_from if c not in to_remove],
+                "applied": False, "verified": None, "mismatches": [],
+            }
+            if dry_run or not (to_add or to_remove):
+                return result
+
+            done: list[str] = []
+            try:
+                for cid in to_add:
+                    await self._writer.add(cid, [item_id])
+                    done.append(f'added to "{cols[cid]["name"]}"')
+                for cid in to_remove:
+                    await self._writer.remove(cid, [item_id])
+                    done.append(f'removed from "{cols[cid]["name"]}"')
+            except JellyfinError as exc:
+                self._cached = None
+                did = "; ".join(done) if done else "nothing was changed"
+                raise ApplyError(f"Partly applied ({did}) before Jellyfin refused: {exc}. "
+                                 "Refresh to see the current state.", 502) from exc
+            except ValueError as exc:  # defensive: the writer's own validation
+                self._cached = None
+                raise ApplyError(f"Refused to send: {exc}", 400) from exc
+
+            result["applied"] = True
+            fresh = await self.snapshot(force=True)
+            fresh_cols = {c["id"]: c for c in fresh["collections"]}
+
+            def now_in(cid: str) -> bool:
+                c = fresh_cols.get(cid)
+                return bool(c) and any(m["id"] == item_id for m in c["members"])
+
+            mismatches = [{"collection": cols[c]["name"], "expected": "in"} for c in to_add if not now_in(c)]
+            mismatches += [{"collection": cols[c]["name"], "expected": "out"} for c in to_remove if now_in(c)]
+            result["mismatches"] = mismatches
+            result["verified"] = not mismatches
+            return result
+
     async def selfcheck(self, sample: int = 12) -> list[dict]:
         checks: list[dict] = []
 
