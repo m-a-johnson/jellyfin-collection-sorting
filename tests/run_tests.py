@@ -248,6 +248,9 @@ def writer_guard():
     class Resp:
         status_code, text = 204, ""
 
+        def json(self):
+            raise ValueError("no body")
+
     async def fake(method, path, params=None):
         calls.append((method, path, params))
         return Resp()
@@ -258,6 +261,15 @@ def writer_guard():
     check("only collection-scoped POST and DELETE are ever built",
           calls == [("POST", f"/Collections/{cid}/Items", {"ids": item}),
                     ("DELETE", f"/Collections/{cid}/Items", {"ids": item})], str(calls))
+    calls.clear()
+    for bad in ("", "  x", "a\nb", "x" * 101):
+        try:
+            asyncio.run(w.create(bad)); ok = False
+        except ValueError:
+            ok = True
+        check(f"create refuses bad name {bad[:8]!r}", ok)
+    asyncio.run(w.create("Fine Name"))
+    check("create sends only POST /Collections with name", calls == [("POST", "/Collections", {"name": "Fine Name"})], str(calls))
     asyncio.run(w.close())
 
 
@@ -353,6 +365,62 @@ def editor_server_rejects_ids():
         stop(app, mock)
 
 
+def create_flow():
+    print("create collection")
+    mock, app = scenario({})
+    try:
+        url = f"{base}/api/collections"
+        post = lambda name, **kw: httpx.post(url, headers=kw.get("headers", HDR), json={"name": name, "dry_run": kw.get("dry_run", False)})
+        check("missing header refused (403)", post("Nope", headers={}).status_code == 403)
+        check("blank name refused", post("   ").status_code == 400)
+        check("control characters refused", post("bad\nname").status_code == 400)
+        check("over-long name refused", post("x" * 101).status_code == 400)
+        check("duplicate refused, case-insensitive (409)", post("etv discovery").status_code == 409)
+        check("Auto Collections name refused (409)", post("middle earth").status_code == 409)
+        d = post("Dry Run Name", dry_run=True)
+        check("dry run creates nothing", d.status_code == 200 and d.json()["created"] is False and mock_log() == [], str(mock_log()))
+
+        r = post("  Saturday Morning  ")
+        j = r.json()
+        check("created, trimmed, verified", r.status_code == 200 and j["created"] and j["verified"] and j["name"] == "Saturday Morning", r.text)
+        log = mock_log()
+        check("exactly one request: POST /Collections with only name",
+              log == [{"method": "POST", "path": "/Collections", "name": "Saturday Morning", "params": ["name"]}], str(log))
+        check("id matches the one in the snapshot", col_ids().get("Saturday Morning") == j["id"])
+        check("new collection starts empty", members("Saturday Morning") == set())
+        check("no forbidden call", not any(e.get("FORBIDDEN") for e in log))
+        check("duplicate of the new one refused", post("Saturday Morning").status_code == 409)
+        a = apply(j["id"], add=[BLUEY])
+        check("can add a show to the new collection", a.status_code == 200 and members("Saturday Morning") == {BLUEY}, a.text)
+    finally:
+        stop(app, mock)
+
+    print("create collection: server refuses an empty collection")
+    mock, app = scenario({"MOCK_REFUSE_EMPTY_CREATE": "1"})
+    try:
+        r = httpx.post(f"{base}/api/collections", headers=HDR, json={"name": "Whatever"})
+        check("surfaced as 502 with Jellyfin's status", r.status_code == 502 and "HTTP 400" in r.json().get("error", ""), r.text)
+        check("nothing created", "Whatever" not in col_ids())
+    finally:
+        stop(app, mock)
+
+    print("create collection: Jellyfin returns no id")
+    mock, app = scenario({"MOCK_CREATE_NO_BODY": "1"})
+    try:
+        r = httpx.post(f"{base}/api/collections", headers=HDR, json={"name": "No Body"})
+        check("found by name instead", r.status_code == 200 and r.json()["verified"] and r.json()["id"] == col_ids().get("No Body"), r.text)
+    finally:
+        stop(app, mock)
+
+    print("create collection: read-only")
+    mock, app = scenario({}, {"READ_ONLY": "1"})
+    try:
+        check("refused (403), nothing sent", httpx.post(f"{base}/api/collections", headers=HDR, json={"name": "X"}).status_code == 403
+              and mock_log() == [])
+    finally:
+        stop(app, mock)
+
+
 def editor_read_only():
     print("editor: read-only mode")
     mock, app = scenario({}, {"READ_ONLY": "1"})
@@ -380,5 +448,6 @@ if __name__ == "__main__":
     editor_partial_failure()
     editor_server_rejects_ids()
     editor_read_only()
+    create_flow()
     print(f"\n{'ALL PASSED' if not failures else str(failures) + ' FAILED'}")
     sys.exit(1 if failures else 0)

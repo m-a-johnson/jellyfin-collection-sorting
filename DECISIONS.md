@@ -1,7 +1,8 @@
 # Decisions
 
 - **Reading and writing are separate classes.** `JellyfinReader` only sends GET. `CollectionWriter` can only send
-  `POST`/`DELETE /Collections/{32-hex id}/Items`; method, path and every ID are validated before a request is built.
+  `POST /Collections` (create, name only) and `POST`/`DELETE /Collections/{32-hex id}/Items`; method, path, name and
+  every ID are validated before a request is built.
   `DELETE /Items` deletes media from the filesystem and must never be reachable. Tests assert this.
 - **Staged edits with a review step.** The two-list editor only changes the screen until Apply is confirmed.
   Reason: collections drive ErsatzTV channel lineups, so a misclick should be cheap to undo.
@@ -23,4 +24,11 @@
   members, per-show lookup), comma-separated `ids` on collection writes (one and several shows), and that removing a
   collection's last item leaves the collection. Collection-member and per-show lookups need `user_id` set; without
   it members came back empty and the per-show call returned 401.
+- **Create collection is built; delete is deliberately not.** Creating sends `POST /Collections?name=...` and nothing
+  else, then re-reads Jellyfin to confirm. Names that already exist (case-insensitive) or that an Auto Collections rule
+  owns are refused. The only delete endpoint seen in the 12.1 spec is `DELETE /Items`, described as deleting from the
+  library *and filesystem*. Whether that spares media when the item is a collection is unverified, and a wrong guess
+  could destroy files, so collections are deleted in Jellyfin's own UI for now.
+- **Still unverified:** whether Jellyfin 12.1 accepts `POST /Collections` with no `ids` (the mock does; try it on a
+  throwaway name first). The error from Jellyfin is shown if it refuses.
 - **Still unverified:** the shape of Auto Collections `ExpressionCollections` entries (only an empty list has been seen).

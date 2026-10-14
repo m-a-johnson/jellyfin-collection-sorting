@@ -58,6 +58,11 @@ class ApplyBody(BaseModel):
     dry_run: bool = False
 
 
+class CreateBody(BaseModel):
+    name: str = Field(max_length=200)
+    dry_run: bool = False
+
+
 @app.get("/api/snapshot")
 async def snapshot(refresh: bool = False):
     return await service.snapshot(force=refresh)
@@ -66,6 +71,11 @@ async def snapshot(refresh: bool = False):
 @app.get("/api/selfcheck")
 async def selfcheck():
     return {"checks": await service.selfcheck()}
+
+
+@app.post("/api/collections", dependencies=[Depends(require_app_header)])
+async def create_collection(body: CreateBody):
+    return await service.create_collection(body.name, body.dry_run)
 
 
 @app.post("/api/collections/{collection_id}/apply", dependencies=[Depends(require_app_header)])

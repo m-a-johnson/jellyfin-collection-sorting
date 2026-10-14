@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from .jellyfin import HEX32, CollectionWriter, JellyfinError, JellyfinReader, nid
+from .jellyfin import HEX32, CollectionWriter, JellyfinError, JellyfinReader, nid, valid_collection_name
 
 SHOW_LIBRARY_TYPES = {"tvshows", "mixed", ""}
 
@@ -136,6 +136,7 @@ class Service:
         return {
             "fetched_at": time.time(),
             "read_only": self._read_only,
+            "managed_names": sorted(managed),
             "server": {"name": info.get("ServerName"), "version": info.get("Version")},
             "libraries": libraries,
             "collections": collections,
@@ -144,6 +145,44 @@ class Service:
             "uncollected_ids_ignoring_managed": uncollected_ignoring_managed,
             "warnings": warnings,
         }
+
+    async def create_collection(self, name: str, dry_run: bool = False) -> dict:
+        """Create an empty collection, then read Jellyfin back to confirm it exists."""
+        if self._read_only:
+            raise ApplyError("The app is running in read-only mode.", 403)
+        name = (name or "").strip()
+        if not valid_collection_name(name):
+            raise ApplyError("A collection name must be 1 to 100 characters with no control characters.")
+        lowered = name.lower()
+
+        async with self._write_lock:
+            snap = await self.snapshot(force=True)
+            if any(c["name"].strip().lower() == lowered for c in snap["collections"]):
+                raise ApplyError(f'A collection named "{name}" already exists.', 409)
+            if lowered in snap["managed_names"]:
+                raise ApplyError(f'"{name}" is a collection name used by an Auto Collections rule, '
+                                 "so the plugin would fill it. Pick another name.", 409)
+            result = {"name": name, "dry_run": dry_run, "created": False, "id": None, "verified": None}
+            if dry_run:
+                return result
+            try:
+                new_id = await self._writer.create(name)
+            except JellyfinError as exc:
+                self._cached = None
+                raise ApplyError(f"Jellyfin refused to create the collection: {exc}", 502) from exc
+
+            result["created"] = True
+            result["id"] = new_id
+            try:
+                fresh = await self.snapshot(force=True)
+            except JellyfinError:
+                result["verified"] = False
+                return result
+            found = (next((c for c in fresh["collections"] if new_id and c["id"] == new_id), None)
+                     or next((c for c in fresh["collections"] if c["name"].strip().lower() == lowered), None))
+            result["id"] = found["id"] if found else new_id
+            result["verified"] = found is not None
+            return result
 
     async def apply_changes(self, collection_id: str, add: list[str], remove: list[str],
                             dry_run: bool = False) -> dict:
