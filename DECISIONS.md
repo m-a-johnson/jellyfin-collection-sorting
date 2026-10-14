@@ -19,7 +19,8 @@
   because the plugin may re-add or remove items on its next run.
 - **config.yml with environment overrides**, API key as a quoted string (an unquoted numeric key is rejected).
 - **No database, no image fetching.** Jellyfin is the source of truth; titles and years only.
-- **Unverified against a real 12.1 server:** `/System/Info/Public`, `/Library/VirtualFolders`,
-  `/Items?parentId=<collection>` member lookup, admin key without `userId`, `ProductionYear` on series.
-  The Self-check tab covers these. Also unverified: the `ids` format 12.1 expects on collection writes, and whether
-  removing a collection's last item deletes the collection.
+- **Verified on a real 12.1.0 server:** the self-check calls (server info, library list, show years, collection
+  members, per-show lookup), comma-separated `ids` on collection writes (one and several shows), and that removing a
+  collection's last item leaves the collection. Collection-member and per-show lookups need `user_id` set; without
+  it members came back empty and the per-show call returned 401.
+- **Still unverified:** the shape of Auto Collections `ExpressionCollections` entries (only an empty list has been seen).
