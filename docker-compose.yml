@@ -1,7 +1,7 @@
 services:
   jf-collections:
     # Replace <repo> with your GitHub repository name.
-    image: ghcr.io/m-a-johnson/<repo>:latest
+    image: ghcr.io/m-a-johnson/jellyfin-collection-sorting:latest
     container_name: jf-collections
     restart: unless-stopped
     ports:
