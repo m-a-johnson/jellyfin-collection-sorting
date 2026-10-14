@@ -1,0 +1,16 @@
+# Copy to /config/config.yml (the app also writes this template itself on first start).
+# Keep the file private: chmod 600. The API key is admin-level.
+jellyfin:
+  url: "https://jellyfin.example.com"
+  # Keep the quotes. An all-digit key would otherwise be read as a number.
+  api_key: "PASTE_ADMIN_API_KEY_HERE"
+  verify_tls: true
+  # Only set this if the self-check shows the API key can't list items
+  # without a user. Leave empty otherwise.
+  user_id: ""
+
+app:
+  cache_seconds: 30
+
+# Environment variables override the file:
+#   JELLYFIN_URL, JELLYFIN_API_KEY, JELLYFIN_VERIFY_TLS, JELLYFIN_USER_ID, CACHE_SECONDS

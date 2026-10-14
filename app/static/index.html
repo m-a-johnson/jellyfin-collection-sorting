@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collection Manager</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2129; --muted:#6b7280; --line:#e3e6ea; --chip:#eef1f5;
+          --accent:#3b6cf6; --auto:#b45309; --autobg:#fdf3e3; --pass:#15803d; --warn:#b45309; --fail:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171c; --fg:#e6e8eb; --muted:#9aa3ae; --line:#2a2f37; --chip:#232831;
+            --accent:#7a9bff; --auto:#f0b45a; --autobg:#33291a; --pass:#4ade80; --warn:#f0b45a; --fail:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding:14px 20px 0; max-width:1000px; margin:0 auto; }
+  main { padding:0 20px 40px; max-width:1000px; margin:0 auto; }
+  h1 { font-size:18px; margin:0 0 10px; }
+  nav { display:flex; gap:4px; border-bottom:1px solid var(--line); }
+  nav button { background:none; border:0; padding:8px 14px; color:var(--muted); font:inherit; cursor:pointer;
+               border-bottom:2px solid transparent; margin-bottom:-1px; }
+  nav button.on { color:var(--fg); border-bottom-color:var(--accent); font-weight:600; }
+  .bar { display:flex; flex-wrap:wrap; gap:12px 18px; align-items:center; padding:12px 0; }
+  .bar label { display:inline-flex; gap:5px; align-items:center; cursor:pointer; }
+  input[type=search] { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
+                       color:var(--fg); font:inherit; min-width:220px; }
+  button.act { padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:var(--chip);
+               color:var(--fg); font:inherit; cursor:pointer; }
+  .muted { color:var(--muted); }
+  ul.rows { list-style:none; margin:0; padding:0; }
+  ul.rows > li { padding:8px 0; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
+  .title { font-weight:500; }
+  .chip { background:var(--chip); border-radius:10px; padding:1px 9px; font-size:13px; }
+  .chip.auto { background:var(--autobg); color:var(--auto); }
+  .badge { font-size:12px; border-radius:4px; padding:1px 6px; background:var(--autobg); color:var(--auto); margin-left:6px; }
+  details { padding:8px 0; border-bottom:1px solid var(--line); }
+  details summary { cursor:pointer; font-weight:500; }
+  details ul { margin:8px 0 2px 18px; padding:0; }
+  .err { color:var(--fail); padding:12px 0; white-space:pre-wrap; }
+  .warn { color:var(--warn); padding:4px 0; }
+  .check { padding:9px 0; border-bottom:1px solid var(--line); }
+  .st { display:inline-block; min-width:44px; font-weight:700; font-size:12px; }
+  .st.pass { color:var(--pass); } .st.warn { color:var(--warn); } .st.fail { color:var(--fail); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Collection Manager <span class="muted" id="server"></span></h1>
+  <nav id="tabs"></nav>
+</header>
+<main>
+  <div class="bar" id="filters"></div>
+  <div id="msg"></div>
+  <div id="view"></div>
+</main>
+<script>
+"use strict";
+// All Jellyfin data is rendered with textContent / text nodes, never innerHTML.
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, "");
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) {
+    if (c == null || c === false) continue;
+    e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+const label = (s) => s.year ? `${s.name} (${s.year})` : s.name;
+
+const state = { snap: null, tab: "shows", libs: new Set(), query: "", ignoreManaged: true, checks: null };
+const TABS = [["shows", "Shows"], ["uncollected", "Uncollected"], ["collections", "Collections"], ["check", "Self-check"]];
+
+async function api(path) {
+  const resp = await fetch(path);
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+  return body;
+}
+function setMsg(text, cls) {
+  const m = document.getElementById("msg");
+  m.replaceChildren(text ? h("div", { class: cls || "err" }, text) : "");
+}
+
+async function load(refresh) {
+  setMsg("");
+  try {
+    state.snap = await api("/api/snapshot" + (refresh ? "?refresh=true" : ""));
+    if (!state.libs.size) state.snap.libraries.filter(l => l.is_show_library).forEach(l => state.libs.add(l.id));
+    const s = state.snap.server;
+    document.getElementById("server").textContent = s && s.name ? `· ${s.name} ${s.version || ""}` : "";
+  } catch (e) { state.snap = null; setMsg(`Could not load from Jellyfin: ${e.message}`); }
+  render();
+}
+
+function colMap() { return new Map(state.snap.collections.map(c => [c.id, c])); }
+function visibleShows(ids) {
+  const q = state.query.trim().toLowerCase();
+  const idSet = ids ? new Set(ids) : null;
+  return state.snap.shows.filter(s =>
+    (!idSet || idSet.has(s.id)) &&
+    s.library_ids.some(id => state.libs.has(id)) &&
+    (!q || s.name.toLowerCase().includes(q)));
+}
+
+function renderTabs() {
+  document.getElementById("tabs").replaceChildren(...TABS.map(([id, name]) =>
+    h("button", { class: state.tab === id ? "on" : "", onclick: () => { state.tab = id; render(); } }, name)));
+}
+
+function renderFilters() {
+  const bar = document.getElementById("filters");
+  if (!state.snap || state.tab === "collections" || state.tab === "check") { bar.replaceChildren(); return; }
+  const libs = state.snap.libraries.filter(l => l.is_show_library).map(l =>
+    h("label", {}, h("input", { type: "checkbox", checked: state.libs.has(l.id), onchange: (ev) => {
+      ev.target.checked ? state.libs.add(l.id) : state.libs.delete(l.id); renderView(); } }), l.name));
+  const search = h("input", { type: "search", placeholder: "Filter by title", value: state.query,
+    oninput: (ev) => { state.query = ev.target.value; renderView(); } });
+  const extra = [];
+  if (state.tab === "uncollected") {
+    extra.push(h("label", {}, h("input", { type: "checkbox", checked: state.ignoreManaged, onchange: (ev) => {
+      state.ignoreManaged = ev.target.checked; renderView(); } }), "Ignore plugin-managed collections"));
+  }
+  bar.replaceChildren(...libs, search, ...extra,
+    h("button", { class: "act", onclick: () => load(true) }, "Refresh"));
+  search.focus && state.query && search.setSelectionRange(state.query.length, state.query.length);
+}
+
+function renderShows() {
+  const cols = colMap(), rows = visibleShows();
+  return [h("div", { class: "muted" }, `${rows.length} shows`),
+    h("ul", { class: "rows" }, rows.map(s => h("li", {},
+      h("span", { class: "title" }, label(s)),
+      s.collection_ids.length ? s.collection_ids.map(id => cols.get(id)).filter(Boolean).map(c =>
+        h("span", { class: "chip" + (c.managed ? " auto" : "") }, c.name))
+        : h("span", { class: "muted" }, "no collection"))))];
+}
+
+function renderUncollected() {
+  const ids = state.ignoreManaged ? state.snap.uncollected_ids_ignoring_managed : state.snap.uncollected_ids;
+  const rows = visibleShows(ids);
+  return [h("div", { class: "muted" }, `${rows.length} shows in no collection` +
+      (state.ignoreManaged ? " (shows only in plugin-managed collections are included)" : "")),
+    h("ul", { class: "rows" }, rows.map(s => h("li", {}, h("span", { class: "title" }, label(s)))))];
+}
+
+function renderCollections() {
+  return [h("div", { class: "muted bar" }, `${state.snap.collections.length} collections`),
+    ...state.snap.collections.map(c => h("details", {},
+      h("summary", {}, c.name, h("span", { class: "muted" }, ` · ${c.members.length} shows`),
+        c.other_count ? h("span", { class: "muted" }, ` · ${c.other_count} other items`) : null,
+        c.managed ? h("span", { class: "badge" }, "managed by Auto Collections") : null),
+      h("ul", {}, c.members.map(m => h("li", {}, label(m))))))];
+}
+
+function renderCheck() {
+  const run = h("button", { class: "act", onclick: async (ev) => {
+    ev.target.disabled = true; ev.target.textContent = "Running…"; setMsg("");
+    try { state.checks = (await api("/api/selfcheck")).checks; } catch (e) { setMsg(e.message); }
+    render();
+  } }, state.checks ? "Run again" : "Run self-check");
+  return [h("p", { class: "muted" }, "Tests the Jellyfin calls this app depends on and cross-checks the collection data. Read-only."),
+    run,
+    ...(state.checks || []).map(c => h("div", { class: "check" },
+      h("span", { class: "st " + c.status }, c.status.toUpperCase()), h("strong", {}, c.name), h("div", { class: "muted" }, c.detail)))];
+}
+
+function renderView() {
+  const view = document.getElementById("view");
+  if (state.tab === "check") { view.replaceChildren(...renderCheck()); return; }
+  if (!state.snap) { view.replaceChildren(); return; }
+  const fn = { shows: renderShows, uncollected: renderUncollected, collections: renderCollections }[state.tab];
+  const warnings = (state.snap.warnings || []).map(w => h("div", { class: "warn" }, w));
+  view.replaceChildren(...warnings, ...fn());
+}
+function render() { renderTabs(); renderFilters(); renderView(); }
+
+load(false);
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+services:
+  jf-collections:
+    # Replace <repo> with your GitHub repository name.
+    image: ghcr.io/m-a-johnson/<repo>:latest
+    container_name: jf-collections
+    restart: unless-stopped
+    ports:
+      - "8099:8000"   # change the host port if 8099 is taken
+    volumes:
+      # config.yml lives here; a template is written on first start
+      - /mnt/user/appdata/jf-collections:/config
