@@ -1,18 +1,25 @@
-"""Read-only Jellyfin client.
+"""Jellyfin clients.
 
-This class deliberately has no method that sends anything other than GET.
-Step 1 of the app only reads; when editing is added, the write calls will be
-collection-scoped (POST/DELETE /Collections/{id}/Items) and nothing here will
-ever be able to reach DELETE /Items, which deletes media from the filesystem.
+Two classes, split on purpose:
+
+* JellyfinReader sends GET requests only. It has no way to change anything.
+* CollectionWriter is the only code that can change anything, and it can only
+  send POST or DELETE to /Collections/{32-hex id}/Items. That path adds or
+  removes a collection's membership and never touches the media. It cannot
+  reach DELETE /Items, which deletes media from the filesystem: the method,
+  the path and every ID are validated before any request is built.
 """
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import httpx
 
 PAGE_SIZE = int(os.environ.get("JF_PAGE_SIZE", "500"))
+WRITE_CHUNK = max(1, int(os.environ.get("JF_WRITE_CHUNK", "50")))
+HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
 
 class JellyfinError(Exception):
@@ -24,19 +31,59 @@ def nid(value: Any) -> str:
     return str(value).replace("-", "").lower()
 
 
+def _make_client(url: str, api_key: str, verify_tls: bool, timeout: float) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=url.rstrip("/"),
+        headers={
+            "Authorization": f'MediaBrowser Token="{api_key}"',
+            "Accept": "application/json",
+        },
+        verify=verify_tls,
+        timeout=timeout,
+    )
+
+
+class CollectionWriter:
+    """Adds items to, and removes items from, a collection. Nothing else."""
+
+    def __init__(self, url: str, api_key: str, verify_tls: bool = True, timeout: float = 30.0):
+        self._client = _make_client(url, api_key, verify_tls, timeout)
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def _send(self, method: str, collection_id: str, ids: list[str]) -> None:
+        if method not in ("POST", "DELETE"):
+            raise ValueError(f"method not allowed: {method}")
+        if not HEX32.match(collection_id):
+            raise ValueError("collection id must be 32 hex characters")
+        if any(not HEX32.match(i) for i in ids):
+            raise ValueError("item ids must be 32 hex characters")
+        if not ids:
+            return
+        path = f"/Collections/{collection_id}/Items"
+        try:
+            resp = await self._client.request(method, path, params={"ids": ",".join(ids)})
+        except httpx.HTTPError as exc:
+            raise JellyfinError(f"{method} {path} failed: {type(exc).__name__}: {exc}") from exc
+        if resp.status_code >= 400:
+            body = resp.text.strip().replace("\n", " ")[:200]
+            raise JellyfinError(f"{method} {path} -> HTTP {resp.status_code}: {body}")
+
+    async def add(self, collection_id: str, ids: list[str]) -> None:
+        for i in range(0, len(ids), WRITE_CHUNK):
+            await self._send("POST", collection_id, ids[i:i + WRITE_CHUNK])
+
+    async def remove(self, collection_id: str, ids: list[str]) -> None:
+        for i in range(0, len(ids), WRITE_CHUNK):
+            await self._send("DELETE", collection_id, ids[i:i + WRITE_CHUNK])
+
+
 class JellyfinReader:
     def __init__(self, url: str, api_key: str, verify_tls: bool = True,
                  user_id: str = "", timeout: float = 30.0):
         self._user_id = user_id
-        self._client = httpx.AsyncClient(
-            base_url=url.rstrip("/"),
-            headers={
-                "Authorization": f'MediaBrowser Token="{api_key}"',
-                "Accept": "application/json",
-            },
-            verify=verify_tls,
-            timeout=timeout,
-        )
+        self._client = _make_client(url, api_key, verify_tls, timeout)
 
     async def close(self) -> None:
         await self._client.aclose()

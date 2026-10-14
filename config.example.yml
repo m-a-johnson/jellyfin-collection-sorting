@@ -11,6 +11,8 @@ jellyfin:
 
 app:
   cache_seconds: 30
+  # true = the editor is disabled and the app can never change Jellyfin.
+  read_only: false
 
 # Environment variables override the file:
-#   JELLYFIN_URL, JELLYFIN_API_KEY, JELLYFIN_VERIFY_TLS, JELLYFIN_USER_ID, CACHE_SECONDS
+#   JELLYFIN_URL, JELLYFIN_API_KEY, JELLYFIN_VERIFY_TLS, JELLYFIN_USER_ID, CACHE_SECONDS, READ_ONLY

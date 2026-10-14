@@ -4,11 +4,16 @@ Scenario switches (environment variables):
   MOCK_BREAK_NATIVE=1  /Items/{id}/Collections returns nothing (disagrees with member lists)
   MOCK_NO_NATIVE=1     /Items/{id}/Collections returns 404
   MOCK_NO_AUTOCOL=1    /AutoCollections/ExportConfiguration returns 404
+  MOCK_REPEATED_ONLY=1 collection writes reject comma-separated ids with HTTP 400
+  MOCK_FAIL_REMOVE=1   DELETE /Collections/{id}/Items returns HTTP 500
+
+Every write is recorded and readable at GET /__log, including any call to
+DELETE /Items (which the app must never send).
 """
 import os
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 app = FastAPI()
 KEY = "testkey"
@@ -119,3 +124,49 @@ def export():
         raise HTTPException(404, "not found")
     return {"TitleMatchPairs": [{"TitleMatch": "Star Wars", "CollectionName": "Star Wars Collection"}],
             "ExpressionCollections": []}
+
+
+LOG: list[dict] = []
+
+
+def _write(method: str, cid: str, request: Request):
+    raw = request.query_params.getlist("ids")
+    ids = [x for r in raw for x in r.split(",") if x]
+    LOG.append({"method": method, "path": request.url.path, "ids": ids})
+    if os.environ.get("MOCK_REPEATED_ONLY") and any("," in r for r in raw):
+        return JSONResponse({"error": "ids must be repeated parameters"}, status_code=400)
+    if method == "DELETE" and os.environ.get("MOCK_FAIL_REMOVE"):
+        return JSONResponse({"error": "boom"}, status_code=500)
+    target = next((b for b in BOXSETS if b["Id"] == norm(cid)), None)
+    if target is None:
+        raise HTTPException(404, "collection not found")
+    for raw_id in ids:
+        i = norm(raw_id)
+        if method == "POST":
+            item = BY_ID.get(i)
+            if item and all(m["Id"] != i for m in target["members"]):
+                target["members"].append(item)
+        else:
+            target["members"] = [m for m in target["members"] if m["Id"] != i]
+    return Response(status_code=204)
+
+
+@app.post("/Collections/{cid}/Items")
+def add_items(cid: str, request: Request):
+    return _write("POST", cid, request)
+
+
+@app.delete("/Collections/{cid}/Items")
+def remove_items(cid: str, request: Request):
+    return _write("DELETE", cid, request)
+
+
+@app.delete("/Items")
+def forbidden_delete(request: Request):
+    LOG.append({"method": "DELETE", "path": "/Items", "ids": [], "FORBIDDEN": True})
+    return Response(status_code=204)
+
+
+@app.get("/__log")
+def log():
+    return LOG

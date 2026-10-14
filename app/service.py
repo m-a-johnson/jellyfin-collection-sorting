@@ -4,9 +4,17 @@ from __future__ import annotations
 import asyncio
 import time
 
-from .jellyfin import JellyfinError, JellyfinReader, nid
+from .jellyfin import HEX32, CollectionWriter, JellyfinError, JellyfinReader, nid
 
 SHOW_LIBRARY_TYPES = {"tvshows", "mixed", ""}
+
+
+class ApplyError(Exception):
+    """A change request that was refused or only partly carried out."""
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
 
 
 def _managed_names(export: dict) -> set[str]:
@@ -30,10 +38,14 @@ def _managed_names(export: dict) -> set[str]:
 
 
 class Service:
-    def __init__(self, reader: JellyfinReader, cache_seconds: int):
+    def __init__(self, reader: JellyfinReader, writer: CollectionWriter,
+                 cache_seconds: int, read_only: bool = False):
         self._reader = reader
+        self._writer = writer
         self._ttl = cache_seconds
+        self._read_only = read_only
         self._lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
         self._cached: dict | None = None
 
     async def snapshot(self, force: bool = False) -> dict:
@@ -123,6 +135,7 @@ class Service:
         info = await r.public_info()
         return {
             "fetched_at": time.time(),
+            "read_only": self._read_only,
             "server": {"name": info.get("ServerName"), "version": info.get("Version")},
             "libraries": libraries,
             "collections": collections,
@@ -131,6 +144,88 @@ class Service:
             "uncollected_ids_ignoring_managed": uncollected_ignoring_managed,
             "warnings": warnings,
         }
+
+    async def apply_changes(self, collection_id: str, add: list[str], remove: list[str],
+                            dry_run: bool = False) -> dict:
+        """Add and remove shows in one collection, then read it back to verify.
+
+        Everything is re-checked against a fresh read of Jellyfin, so a stale
+        browser page cannot cause a surprise: adds of shows that are already
+        members and removals of shows that are not members are skipped and
+        reported rather than sent.
+        """
+        if self._read_only:
+            raise ApplyError("The app is running in read-only mode.", 403)
+        if not HEX32.match(collection_id):
+            raise ApplyError("Invalid collection id.")
+        bad = [i for i in add + remove if not HEX32.match(i)]
+        if bad:
+            raise ApplyError("Invalid show id in request.")
+        add_set, remove_set = set(add), set(remove)
+        if add_set & remove_set:
+            raise ApplyError("A show cannot be both added and removed in one request.")
+
+        async with self._write_lock:
+            snap = await self.snapshot(force=True)
+            col = next((c for c in snap["collections"] if c["id"] == collection_id), None)
+            if col is None:
+                raise ApplyError("Collection not found. It may have been deleted; refresh.", 404)
+            if col["managed"]:
+                raise ApplyError(f'"{col["name"]}" is managed by the Auto Collections plugin, '
+                                 "which would undo changes made here.", 409)
+            known = {s["id"] for s in snap["shows"]}
+            unknown = add_set - known
+            if unknown:
+                raise ApplyError("Some shows to add were not found in any show library; refresh.")
+
+            members = {m["id"] for m in col["members"]}
+            to_add = sorted(add_set - members)
+            to_remove = sorted(remove_set & members)
+            result = {
+                "collection": col["name"], "dry_run": dry_run,
+                "added": to_add, "removed": to_remove,
+                "skipped_add": sorted(add_set & members),
+                "skipped_remove": sorted(remove_set - members),
+                "applied": False, "verified": None, "mismatches": [],
+            }
+            if dry_run or not (to_add or to_remove):
+                return result
+
+            done_add = done_remove = 0
+            try:
+                for i in range(0, len(to_add), 50):
+                    chunk = to_add[i:i + 50]
+                    await self._writer.add(collection_id, chunk)
+                    done_add += len(chunk)
+                for i in range(0, len(to_remove), 50):
+                    chunk = to_remove[i:i + 50]
+                    await self._writer.remove(collection_id, chunk)
+                    done_remove += len(chunk)
+            except JellyfinError as exc:
+                self._cached = None
+                raise ApplyError(
+                    f"Partly applied: {done_add} of {len(to_add)} added and {done_remove} of "
+                    f"{len(to_remove)} removed before Jellyfin refused: {exc}. "
+                    "Refresh to see the current state.", 502) from exc
+            except ValueError as exc:  # defensive: the writer's own validation
+                self._cached = None
+                raise ApplyError(f"Refused to send: {exc}", 400) from exc
+
+            result["applied"] = True
+            fresh = await self.snapshot(force=True)
+            fresh_col = next((c for c in fresh["collections"] if c["id"] == collection_id), None)
+            names = {s["id"]: s["name"] for s in fresh["shows"]}
+            fresh_members = {m["id"] for m in fresh_col["members"]} if fresh_col else set()
+            mismatches = []
+            for sid in to_add:
+                if sid not in fresh_members:
+                    mismatches.append({"id": sid, "name": names.get(sid, sid), "expected": "in"})
+            for sid in to_remove:
+                if sid in fresh_members:
+                    mismatches.append({"id": sid, "name": names.get(sid, sid), "expected": "out"})
+            result["mismatches"] = mismatches
+            result["verified"] = not mismatches
+            return result
 
     async def selfcheck(self, sample: int = 12) -> list[dict]:
         checks: list[dict] = []

@@ -5,29 +5,35 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collection Manager</title>
 <style>
-  :root { --bg:#fff; --fg:#1d2129; --muted:#6b7280; --line:#e3e6ea; --chip:#eef1f5;
+  :root { --bg:#fff; --fg:#1d2129; --muted:#6b7280; --line:#e3e6ea; --chip:#eef1f5; --selbg:#e6edff; --onaccent:#fff;
           --accent:#3b6cf6; --auto:#b45309; --autobg:#fdf3e3; --pass:#15803d; --warn:#b45309; --fail:#b91c1c; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#14171c; --fg:#e6e8eb; --muted:#9aa3ae; --line:#2a2f37; --chip:#232831;
+    :root { --bg:#14171c; --fg:#e6e8eb; --muted:#9aa3ae; --line:#2a2f37; --chip:#232831; --selbg:#1f2c4d; --onaccent:#0b1020;
             --accent:#7a9bff; --auto:#f0b45a; --autobg:#33291a; --pass:#4ade80; --warn:#f0b45a; --fail:#f87171; }
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { padding:14px 20px 0; max-width:1000px; margin:0 auto; }
-  main { padding:0 20px 40px; max-width:1000px; margin:0 auto; }
+  header { padding:14px 20px 0; max-width:1100px; margin:0 auto; }
+  main { padding:0 20px 40px; max-width:1100px; margin:0 auto; }
   h1 { font-size:18px; margin:0 0 10px; }
-  nav { display:flex; gap:4px; border-bottom:1px solid var(--line); }
+  nav { display:flex; flex-wrap:wrap; gap:4px; border-bottom:1px solid var(--line); }
   nav button { background:none; border:0; padding:8px 14px; color:var(--muted); font:inherit; cursor:pointer;
                border-bottom:2px solid transparent; margin-bottom:-1px; }
   nav button.on { color:var(--fg); border-bottom-color:var(--accent); font-weight:600; }
   .bar { display:flex; flex-wrap:wrap; gap:12px 18px; align-items:center; padding:12px 0; }
   .bar label { display:inline-flex; gap:5px; align-items:center; cursor:pointer; }
-  input[type=search] { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
-                       color:var(--fg); font:inherit; min-width:220px; }
+  input[type=search], select { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
+                       color:var(--fg); font:inherit; }
+  input[type=search] { min-width:220px; }
+  .bar label { max-width:100%; }
+  .bar select { min-width:0; max-width:100%; }
   button.act { padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:var(--chip);
                color:var(--fg); font:inherit; cursor:pointer; }
+  button.act:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--onaccent); font-weight:600; }
   .muted { color:var(--muted); }
+  .small { font-size:13px; }
   ul.rows { list-style:none; margin:0; padding:0; }
   ul.rows > li { padding:8px 0; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
   .title { font-weight:500; }
@@ -42,6 +48,34 @@
   .check { padding:9px 0; border-bottom:1px solid var(--line); }
   .st { display:inline-block; min-width:44px; font-weight:700; font-size:12px; }
   .st.pass { color:var(--pass); } .st.warn { color:var(--warn); } .st.fail { color:var(--fail); }
+
+  /* editor */
+  .dual { display:grid; grid-template-columns:1fr auto 1fr; gap:12px; align-items:stretch; }
+  .dual section { min-width:0; display:flex; flex-direction:column; gap:6px; }
+  .dual h3 { margin:0; font-size:14px; }
+  .dual input[type=search] { min-width:0; width:100%; }
+  ul.pick { list-style:none; margin:0; padding:0; height:min(60vh, 520px); overflow:auto;
+            border:1px solid var(--line); border-radius:8px; }
+  ul.pick li.row { display:flex; flex-wrap:wrap; gap:2px 8px; align-items:baseline; padding:6px 10px;
+                   border-bottom:1px solid var(--line); cursor:pointer; user-select:none; }
+  ul.pick li.row:hover { background:var(--chip); }
+  ul.pick li.row.sel { background:var(--selbg); outline:1px solid var(--accent); outline-offset:-1px; }
+  ul.pick li.row:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  ul.pick li .mark { display:inline-block; width:12px; font-weight:700; }
+  li.pend-add { box-shadow:inset 3px 0 0 var(--pass); } li.pend-add .mark { color:var(--pass); }
+  li.pend-rem { box-shadow:inset 3px 0 0 var(--fail); } li.pend-rem .mark { color:var(--fail); }
+  .mid { display:flex; flex-direction:column; justify-content:center; gap:10px; }
+  button.mv { white-space:nowrap; }
+  .pending { margin-top:12px; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+             display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+  .review { flex-basis:100%; display:grid; gap:6px; }
+  .review .st { min-width:56px; }
+  .banner { margin:0 0 10px; padding:9px 12px; border-radius:8px; border:1px solid var(--line); }
+  .banner.ok { border-color:var(--pass); } .banner.bad { border-color:var(--fail); }
+  @media (max-width: 760px) {
+    .dual { grid-template-columns:1fr; }
+    .mid { flex-direction:row; justify-content:center; }
+  }
 </style>
 </head>
 <body>
@@ -72,9 +106,16 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 const label = (s) => s.year ? `${s.name} (${s.year})` : s.name;
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (a.year || 0) - (b.year || 0);
 
-const state = { snap: null, tab: "shows", libs: new Set(), query: "", ignoreManaged: true, checks: null };
-const TABS = [["shows", "Shows"], ["uncollected", "Uncollected"], ["collections", "Collections"], ["check", "Self-check"]];
+const state = {
+  snap: null, tab: "editor", libs: new Set(), query: "", ignoreManaged: true, checks: null,
+  editCol: null, pendAdd: new Set(), pendRem: new Set(), selL: new Set(), selR: new Set(),
+  lastL: null, lastR: null, qL: "", qR: "", confirming: false, busy: false, result: null,
+};
+let ed = {};   // handles to the editor's DOM nodes, rebuilt whenever the editor tab renders
+const TABS = [["editor", "Editor"], ["shows", "Shows"], ["uncollected", "Uncollected"],
+              ["collections", "Collections"], ["check", "Self-check"]];
 
 async function api(path) {
   const resp = await fetch(path);
@@ -87,11 +128,13 @@ function setMsg(text, cls) {
   m.replaceChildren(text ? h("div", { class: cls || "err" }, text) : "");
 }
 
-async function load(refresh) {
-  setMsg("");
+async function load(refresh, keepMsg) {
+  if (!keepMsg) setMsg("");
   try {
     state.snap = await api("/api/snapshot" + (refresh ? "?refresh=true" : ""));
     if (!state.libs.size) state.snap.libraries.filter(l => l.is_show_library).forEach(l => state.libs.add(l.id));
+    ensureEditCol();
+    prunePending();
     const s = state.snap.server;
     document.getElementById("server").textContent = s && s.name ? `· ${s.name} ${s.version || ""}` : "";
   } catch (e) { state.snap = null; setMsg(`Could not load from Jellyfin: ${e.message}`); }
@@ -99,6 +142,31 @@ async function load(refresh) {
 }
 
 function colMap() { return new Map(state.snap.collections.map(c => [c.id, c])); }
+function currentCol() { return state.snap && state.snap.collections.find(c => c.id === state.editCol) || null; }
+function clearEdits() { state.pendAdd.clear(); state.pendRem.clear(); state.selL.clear(); state.selR.clear();
+                        state.lastL = state.lastR = null; state.confirming = false; }
+function ensureEditCol() {
+  const cols = state.snap.collections;
+  if (!cols.some(c => c.id === state.editCol)) {
+    state.editCol = (cols.find(c => !c.managed) || cols[0] || {}).id || null;
+    clearEdits();
+  }
+}
+// After a reload, forget staged changes Jellyfin already reflects (e.g. after a partly applied change).
+function prunePending() {
+  const col = currentCol();
+  if (!col) { clearEdits(); return; }
+  const base = new Set(col.members.map(m => m.id));
+  for (const id of [...state.pendAdd]) if (base.has(id)) state.pendAdd.delete(id);
+  for (const id of [...state.pendRem]) if (!base.has(id)) state.pendRem.delete(id);
+}
+function lockReason() {
+  if (state.snap.read_only) return "The app is in read-only mode, so editing is disabled.";
+  const col = currentCol();
+  if (col && col.managed) return `"${col.name}" is managed by the Auto Collections plugin, which would undo changes made here. It is shown read-only.`;
+  return "";
+}
+
 function visibleShows(ids) {
   const q = state.query.trim().toLowerCase();
   const idSet = ids ? new Set(ids) : null;
@@ -115,7 +183,7 @@ function renderTabs() {
 
 function renderFilters() {
   const bar = document.getElementById("filters");
-  if (!state.snap || state.tab === "collections" || state.tab === "check") { bar.replaceChildren(); return; }
+  if (!state.snap || ["collections", "check", "editor"].includes(state.tab)) { bar.replaceChildren(); return; }
   const libs = state.snap.libraries.filter(l => l.is_show_library).map(l =>
     h("label", {}, h("input", { type: "checkbox", checked: state.libs.has(l.id), onchange: (ev) => {
       ev.target.checked ? state.libs.add(l.id) : state.libs.delete(l.id); renderView(); } }), l.name));
@@ -170,13 +238,238 @@ function renderCheck() {
       h("span", { class: "st " + c.status }, c.status.toUpperCase()), h("strong", {}, c.name), h("div", { class: "muted" }, c.detail)))];
 }
 
+/* ---------------- editor ---------------- */
+
+// id -> show-like record, for every show in a show library plus any collection member outside them
+function info() {
+  const m = new Map();
+  for (const c of state.snap.collections)
+    for (const x of c.members)
+      if (!m.has(x.id)) m.set(x.id, { id: x.id, name: x.name, year: x.year, library_ids: [], collection_ids: [] });
+  for (const s of state.snap.shows) m.set(s.id, s);
+  return m;
+}
+
+// What the two lists show once staged changes are applied on screen.
+function lists() {
+  const col = currentCol(), inf = info();
+  const base = new Set(col.members.map(m => m.id));
+  const right = new Set([...base].filter(id => !state.pendRem.has(id)));
+  state.pendAdd.forEach(id => right.add(id));
+  const ql = state.qL.trim().toLowerCase(), qr = state.qR.trim().toLowerCase();
+  const leftIds = new Set();
+  for (const s of state.snap.shows)
+    if (!right.has(s.id) && s.library_ids.some(l => state.libs.has(l))) leftIds.add(s.id);
+  state.pendRem.forEach(id => { if (!right.has(id)) leftIds.add(id); });   // always allow undoing a removal
+  const pick = (ids, q) => [...ids].map(id => inf.get(id)).filter(Boolean)
+    .filter(s => !q || s.name.toLowerCase().includes(q)).sort(byName);
+  return { left: pick(leftIds, ql), right: pick(right, qr) };
+}
+
+function fill(ul, items, side) {
+  const sel = side === "L" ? state.selL : state.selR;
+  const cols = colMap();
+  ul.replaceChildren(...items.map(s => {
+    const pend = side === "R" ? state.pendAdd.has(s.id) : state.pendRem.has(s.id);
+    const others = (s.collection_ids || []).map(id => cols.get(id)).filter(c => c && c.id !== state.editCol);
+    return h("li", { "data-id": s.id, role: "option", tabindex: "0",
+        "aria-selected": sel.has(s.id) ? "true" : "false",
+        class: "row" + (sel.has(s.id) ? " sel" : "") + (pend ? (side === "R" ? " pend-add" : " pend-rem") : "") },
+      h("span", { class: "mark" }, pend ? (side === "R" ? "+" : "−") : ""),
+      h("span", { class: "title" }, label(s)),
+      others.slice(0, 3).map(c => h("span", { class: "chip" + (c.managed ? " auto" : "") }, c.name)),
+      others.length > 3 ? h("span", { class: "muted small" }, `+${others.length - 3}`) : null);
+  }));
+}
+
+function rowClick(side, ev) {
+  const li = ev.target.closest("li[data-id]");
+  if (!li) return;
+  const id = li.dataset.id;
+  const sel = side === "L" ? state.selL : state.selR, order = side === "L" ? ed.orderL : ed.orderR;
+  const lastKey = side === "L" ? "lastL" : "lastR";
+  if (ev.shiftKey && state[lastKey] && order.includes(state[lastKey])) {
+    const a = order.indexOf(state[lastKey]), b = order.indexOf(id);
+    order.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(x => sel.add(x));
+  } else {
+    sel.has(id) ? sel.delete(id) : sel.add(id);
+  }
+  state[lastKey] = id;
+  syncSelection();   // update rows in place: rebuilding them here would break double-click
+}
+function syncSelection() {
+  if (!ed.ulL) return;
+  for (const [ul, sel] of [[ed.ulL, state.selL], [ed.ulR, state.selR]])
+    for (const li of ul.children) {
+      const on = sel.has(li.dataset.id);
+      li.classList.toggle("sel", on);
+      li.setAttribute("aria-selected", on ? "true" : "false");
+    }
+  const visL = new Set(ed.orderL), visR = new Set(ed.orderR), lock = lockReason();
+  ed.btnAdd.disabled = !!lock || state.busy || ![...state.selL].some(id => visL.has(id));
+  ed.btnRem.disabled = !!lock || state.busy || ![...state.selR].some(id => visR.has(id));
+}
+function rowDbl(side, ev) {
+  const li = ev.target.closest("li[data-id]");
+  if (li && !lockReason() && !state.busy) moveIds(side, [li.dataset.id]);
+}
+function rowKey(side, ev) {
+  const li = ev.target.closest("li[data-id]");
+  if (!li) return;
+  if (ev.key === " ") { ev.preventDefault(); rowClick(side, ev); }
+  else if (ev.key === "Enter") { ev.preventDefault(); rowDbl(side, ev); }
+}
+
+// from "L": add to the collection. from "R": remove from it. Staging only; nothing is sent to Jellyfin.
+function moveIds(from, ids) {
+  for (const id of ids) {
+    if (from === "L") { state.pendRem.has(id) ? state.pendRem.delete(id) : state.pendAdd.add(id); state.selL.delete(id); }
+    else { state.pendAdd.has(id) ? state.pendAdd.delete(id) : state.pendRem.add(id); state.selR.delete(id); }
+  }
+  state.result = null; state.confirming = false;
+  setMsg("");
+  updateEditor();
+}
+function moveSelected(from) {
+  if (lockReason() || state.busy) return;
+  const vis = new Set(from === "L" ? ed.orderL : ed.orderR);
+  moveIds(from, [...(from === "L" ? state.selL : state.selR)].filter(id => vis.has(id)));
+}
+
+function onPickCollection(ev) {
+  if (state.pendAdd.size || state.pendRem.size) {
+    ev.target.value = state.editCol;
+    setMsg("Apply or revert the pending changes before switching collections.", "warn");
+    return;
+  }
+  state.editCol = ev.target.value;
+  clearEdits(); state.result = null; setMsg("");
+  updateEditor();
+}
+
+async function doApply() {
+  const col = currentCol();
+  state.busy = true; state.confirming = false; setMsg("");
+  updateEditor();
+  let failed = false;
+  try {
+    const resp = await fetch(`/api/collections/${encodeURIComponent(col.id)}/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "jf-collections" },
+      body: JSON.stringify({ add: [...state.pendAdd], remove: [...state.pendRem] }),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+    state.result = body;
+    clearEdits();
+  } catch (e) { failed = true; setMsg(`Not applied: ${e.message}`); }
+  state.busy = false;
+  await load(true, failed);
+}
+
+function resultBanner() {
+  const r = state.result;
+  if (!r) return "";
+  const parts = [`${r.added.length} added, ${r.removed.length} removed in "${r.collection}".`];
+  const skipped = r.skipped_add.length + r.skipped_remove.length;
+  if (skipped) parts.push(`${skipped} change(s) skipped because Jellyfin already had them in that state.`);
+  if (!r.applied) return h("div", { class: "banner" }, "Nothing to change. " + parts.slice(1).join(" "));
+  if (r.verified) return h("div", { class: "banner ok" }, `Applied: ${parts.join(" ")} Checked against Jellyfin: every change is there.`);
+  return h("div", { class: "banner bad" }, `Applied, but Jellyfin does not show these changes: ` +
+    r.mismatches.map(m => `${m.name} (expected ${m.expected === "in" ? "in" : "out of"} the collection)`).join(", ") +
+    `. Another process may have changed the collection, or Jellyfin handled the request differently.`);
+}
+
+function pendingBar() {
+  const inf = info(), col = currentCol();
+  const n = state.pendAdd.size + state.pendRem.size;
+  const lock = !!lockReason();
+  if (state.confirming) {
+    const names = (set) => [...set].map(id => inf.get(id)).filter(Boolean).sort(byName).map(label).join(", ");
+    return [h("div", { class: "review" },
+      h("strong", {}, `Apply these changes to "${col.name}"?`),
+      state.pendAdd.size ? h("div", {}, h("span", { class: "st pass" }, "ADD"), names(state.pendAdd)) : null,
+      state.pendRem.size ? h("div", {}, h("span", { class: "st fail" }, "REMOVE"), names(state.pendRem)) : null,
+      h("div", { class: "muted small" }, "Removing a show here only takes it out of this collection. The show itself stays in your library.")),
+      h("button", { class: "act primary", onclick: doApply }, "Confirm"),
+      h("button", { class: "act", onclick: () => { state.confirming = false; updateEditor(); } }, "Cancel")];
+  }
+  return [h("span", { class: n ? "" : "muted" },
+      n ? `Pending: +${state.pendAdd.size} −${state.pendRem.size}` : "No pending changes"),
+    h("button", { class: "act primary", disabled: !n || lock || state.busy,
+      onclick: () => { state.confirming = true; updateEditor(); } }, state.busy ? "Applying…" : "Apply…"),
+    h("button", { class: "act", disabled: !n || state.busy,
+      onclick: () => { clearEdits(); state.result = null; updateEditor(); } }, "Revert")];
+}
+
+function updateEditor() {
+  if (state.tab !== "editor" || !ed.ulL || !state.snap) return;
+  const col = currentCol(), lock = lockReason();
+  const { left, right } = lists();
+  ed.orderL = left.map(s => s.id); ed.orderR = right.map(s => s.id);
+  fill(ed.ulL, left, "L"); fill(ed.ulR, right, "R");
+  ed.hL.textContent = `Not in collection (${left.length})`;
+  ed.hR.textContent = `In "${col.name}" (${right.length})`;
+  syncSelection();
+  ed.note.replaceChildren(lock ? h("div", { class: "warn" }, lock) : "");
+  const banner = resultBanner();
+  ed.result.replaceChildren(banner || "");
+  ed.pending.replaceChildren(...pendingBar());
+  if (state.confirming) ed.pending.scrollIntoView({ block: "nearest" });
+}
+
+function renderEditor() {
+  ed = {};
+  const cols = state.snap.collections;
+  if (!cols.length)
+    return [h("p", { class: "muted" }, "There are no collections yet. Create one in Jellyfin first; creating collections here is a planned next step.")];
+
+  const select = h("select", { "aria-label": "Collection", onchange: onPickCollection },
+    cols.map(c => h("option", { value: c.id }, c.name + (c.managed ? " (managed, read-only)" : ""))));
+  select.value = state.editCol;
+  const libBoxes = state.snap.libraries.filter(l => l.is_show_library).map(l =>
+    h("label", {}, h("input", { type: "checkbox", checked: state.libs.has(l.id), onchange: (ev) => {
+      ev.target.checked ? state.libs.add(l.id) : state.libs.delete(l.id); updateEditor(); } }), l.name));
+
+  const side = (key, heading, ul) => h("section", {}, heading,
+    h("input", { type: "search", placeholder: "Filter by title", "aria-label": "Filter " + key, value: state[key],
+      oninput: (ev) => { state[key] = ev.target.value; updateEditor(); } }), ul);
+  const mkList = (s, name) => {
+    const ul = h("ul", { class: "pick", role: "listbox", "aria-multiselectable": "true", "aria-label": name });
+    ul.addEventListener("click", (ev) => rowClick(s, ev));
+    ul.addEventListener("dblclick", (ev) => rowDbl(s, ev));
+    ul.addEventListener("keydown", (ev) => rowKey(s, ev));
+    return ul;
+  };
+  ed.hL = h("h3"); ed.hR = h("h3");
+  ed.ulL = mkList("L", "Shows not in the collection"); ed.ulR = mkList("R", "Shows in the collection");
+  ed.btnAdd = h("button", { class: "act mv", onclick: () => moveSelected("L") }, "Add →");
+  ed.btnRem = h("button", { class: "act mv", onclick: () => moveSelected("R") }, "← Remove");
+  ed.note = h("div"); ed.result = h("div"); ed.pending = h("div", { class: "pending" });
+
+  return [
+    h("div", { class: "bar" }, h("label", {}, "Collection", select), ...libBoxes,
+      h("button", { class: "act", onclick: () => load(true) }, "Refresh")),
+    ed.note, ed.result,
+    h("div", { class: "dual" },
+      side("qL", ed.hL, ed.ulL),
+      h("div", { class: "mid" }, ed.btnAdd, ed.btnRem),
+      side("qR", ed.hR, ed.ulR)),
+    ed.pending,
+    h("p", { class: "muted small" }, "Click a show to select it (click again to deselect), Shift-click for a range, double-click or Enter to move one. " +
+      "Moves are only staged; nothing changes in Jellyfin until you apply. Chips show the show's other collections."),
+  ];
+}
+
 function renderView() {
   const view = document.getElementById("view");
   if (state.tab === "check") { view.replaceChildren(...renderCheck()); return; }
   if (!state.snap) { view.replaceChildren(); return; }
-  const fn = { shows: renderShows, uncollected: renderUncollected, collections: renderCollections }[state.tab];
+  const fn = { editor: renderEditor, shows: renderShows, uncollected: renderUncollected,
+               collections: renderCollections }[state.tab];
   const warnings = (state.snap.warnings || []).map(w => h("div", { class: "warn" }, w));
   view.replaceChildren(...warnings, ...fn());
+  if (state.tab === "editor") updateEditor();
 }
 function render() { renderTabs(); renderFilters(); renderView(); }
 

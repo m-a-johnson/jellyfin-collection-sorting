@@ -189,6 +189,184 @@ def startup_without_config():
     check("template written", (d / "config.yml").exists())
 
 
+
+# ---------------------------------------------------------------- editor / writes
+
+HDR = {"X-Requested-With": "jf-collections"}
+MOCK_AUTH = {"Authorization": 'MediaBrowser Token="testkey"'}
+
+
+def sid(n: int) -> str:          # show ids used by the mock
+    return ("b" + f"{n:02d}").ljust(32, "0")
+
+
+BLUEY, OCTONAUTS, WILD_KRATTS, REBOOT_94, DANIEL_TIGER = sid(1), sid(2), sid(3), sid(4), sid(7)
+
+
+def mock_log() -> list:
+    return httpx.get(f"http://127.0.0.1:{MOCK_PORT}/__log", headers=MOCK_AUTH).json()
+
+
+def col_ids() -> dict:
+    snap = httpx.get(f"{base}/api/snapshot").json()
+    return {c["name"]: c["id"] for c in snap["collections"]}
+
+
+def members(name: str) -> set:
+    snap = httpx.get(f"{base}/api/snapshot").json()
+    c = next(c for c in snap["collections"] if c["name"] == name)
+    return {m["id"] for m in c["members"]}
+
+
+def apply(cid: str, add=(), remove=(), dry_run=False, headers=HDR):
+    return httpx.post(f"{base}/api/collections/{cid}/apply", headers=headers,
+                      json={"add": list(add), "remove": list(remove), "dry_run": dry_run})
+
+
+def writer_guard():
+    print("writer guard (no network)")
+    import asyncio
+    from app.jellyfin import CollectionWriter
+    w = CollectionWriter("http://127.0.0.1:1", "k")
+    cid, item = "d" * 32, "b" * 32
+
+    def refused(*args) -> bool:
+        try:
+            asyncio.run(w._send(*args))
+        except ValueError:
+            return True
+        return False
+
+    check("PUT refused", refused("PUT", cid, [item]))
+    check("GET refused", refused("GET", cid, [item]))
+    check("path-traversal collection id refused", refused("DELETE", "../Items", [item]))
+    check("empty collection id (would hit /Items) refused", refused("DELETE", "", [item]))
+    check("non-hex item id refused", refused("DELETE", cid, ["not-hex"]))
+
+    calls = []
+
+    class Resp:
+        status_code, text = 204, ""
+
+    async def fake(method, path, params=None):
+        calls.append((method, path, params))
+        return Resp()
+
+    w._client.request = fake
+    asyncio.run(w.add(cid, [item]))
+    asyncio.run(w.remove(cid, [item]))
+    check("only collection-scoped POST and DELETE are ever built",
+          calls == [("POST", f"/Collections/{cid}/Items", {"ids": item}),
+                    ("DELETE", f"/Collections/{cid}/Items", {"ids": item})], str(calls))
+    asyncio.run(w.close())
+
+
+def editor_flow():
+    print("editor: dry run, apply, verify, skips, refusals")
+    mock, app = scenario({})
+    try:
+        ids = col_ids()
+        etv, star, empty = ids["ETV Discovery"], ids["Star Wars Collection"], ids["Empty Test"]
+
+        r = apply(etv, add=[BLUEY], remove=[WILD_KRATTS], dry_run=True)
+        j = r.json()
+        check("dry run plans the change", r.status_code == 200 and j["added"] == [BLUEY] and j["removed"] == [WILD_KRATTS]
+              and j["applied"] is False and j["dry_run"] is True, r.text)
+        check("dry run sends nothing", mock_log() == [], str(mock_log()))
+
+        r = apply(etv, add=[BLUEY], remove=[WILD_KRATTS])
+        j = r.json()
+        check("apply succeeds and verifies", r.status_code == 200 and j["applied"] and j["verified"] is True
+              and j["mismatches"] == [], r.text)
+        log = mock_log()
+        check("exactly one POST then one DELETE, both collection-scoped",
+              [(e["method"], e["path"], e["ids"]) for e in log] ==
+              [("POST", f"/Collections/{etv}/Items", [BLUEY]), ("DELETE", f"/Collections/{etv}/Items", [WILD_KRATTS])], str(log))
+        check("DELETE /Items was never called", not any(e.get("FORBIDDEN") for e in log))
+
+        check("ETV membership updated", members("ETV Discovery") == {OCTONAUTS, REBOOT_94, BLUEY}, str(members("ETV Discovery")))
+        snap = httpx.get(f"{base}/api/snapshot").json()
+        unc = {x["id"] for x in snap["shows"] if x["id"] in set(snap["uncollected_ids"])}
+        check("Wild Kratts now uncollected, Bluey no longer", WILD_KRATTS in unc and BLUEY not in unc, str(unc))
+        wk = next(x for x in snap["shows"] if x["id"] == WILD_KRATTS)
+        check("show itself still exists after removal", wk["name"] == "Wild Kratts")
+
+        n = len(mock_log())
+        r = apply(etv, add=[BLUEY], remove=[WILD_KRATTS])
+        j = r.json()
+        check("repeat is skipped, not resent", r.status_code == 200 and j["applied"] is False
+              and j["skipped_add"] == [BLUEY] and j["skipped_remove"] == [WILD_KRATTS], r.text)
+        check("no writes for a repeat", len(mock_log()) == n)
+
+        n = len(mock_log())
+        check("managed collection refused (409)", apply(star, add=[BLUEY]).status_code == 409)
+        check("add and remove of same show refused", apply(etv, add=[DANIEL_TIGER], remove=[DANIEL_TIGER]).status_code == 400)
+        check("unknown show refused", apply(etv, add=["f" * 32]).status_code == 400)
+        check("non-hex id refused", apply(etv, add=["xyz"]).status_code == 400)
+        check("unknown collection is 404", apply("e" * 32, add=[BLUEY]).status_code == 404)
+        check("missing header refused", apply(etv, add=[DANIEL_TIGER], headers={}).status_code == 403)
+        check("wrong header refused", apply(etv, add=[DANIEL_TIGER], headers={"X-Requested-With": "x"}).status_code == 403)
+        check("refusals sent nothing to Jellyfin", len(mock_log()) == n, str(mock_log()[n:]))
+        check("GET endpoints need no header", httpx.get(f"{base}/api/snapshot").status_code == 200)
+    finally:
+        stop(app, mock)
+
+
+def editor_chunking():
+    print("editor: writes are chunked")
+    mock, app = scenario({}, {"JF_WRITE_CHUNK": "1"})
+    try:
+        empty = col_ids()["Empty Test"]
+        r = apply(empty, add=[BLUEY, DANIEL_TIGER])
+        posts = [e for e in mock_log() if e["method"] == "POST"]
+        check("two shows sent as two requests", r.status_code == 200 and len(posts) == 2, str(mock_log()))
+        check("both added", members("Empty Test") == {BLUEY, DANIEL_TIGER})
+    finally:
+        stop(app, mock)
+
+
+def editor_partial_failure():
+    print("editor: remove fails after add succeeded")
+    mock, app = scenario({"MOCK_FAIL_REMOVE": "1"})
+    try:
+        etv = col_ids()["ETV Discovery"]
+        r = apply(etv, add=[BLUEY], remove=[WILD_KRATTS])
+        err = r.json().get("error", "")
+        check("502 with a partial-apply message", r.status_code == 502 and "Partly applied" in err
+              and "1 of 1 added" in err and "0 of 1 removed" in err, r.text)
+        m = members("ETV Discovery")
+        check("the add did happen and the app reports the real state", BLUEY in m and WILD_KRATTS in m, str(m))
+    finally:
+        stop(app, mock)
+
+
+def editor_server_rejects_ids():
+    print("editor: server rejects comma-separated ids")
+    mock, app = scenario({"MOCK_REPEATED_ONLY": "1"})
+    try:
+        etv = col_ids()["ETV Discovery"]
+        r = apply(etv, add=[BLUEY, DANIEL_TIGER])   # two ids, so the comma form is actually used
+        err = r.json().get("error", "")
+        check("surfaced as 502 with Jellyfin's status", r.status_code == 502 and "HTTP 400" in err and "0 of 2 added" in err, r.text)
+        check("nothing changed", not ({BLUEY, DANIEL_TIGER} & members("ETV Discovery")))
+    finally:
+        stop(app, mock)
+
+
+def editor_read_only():
+    print("editor: read-only mode")
+    mock, app = scenario({}, {"READ_ONLY": "1"})
+    try:
+        snap = httpx.get(f"{base}/api/snapshot").json()
+        check("snapshot reports read_only", snap["read_only"] is True)
+        etv = col_ids()["ETV Discovery"]
+        check("apply refused (403)", apply(etv, add=[BLUEY]).status_code == 403)
+        check("dry run also refused", apply(etv, add=[BLUEY], dry_run=True).status_code == 403)
+        check("nothing sent", mock_log() == [], str(mock_log()))
+    finally:
+        stop(app, mock)
+
+
 if __name__ == "__main__":
     config_tests()
     happy_path()
@@ -196,5 +374,11 @@ if __name__ == "__main__":
     native_missing()
     bad_key()
     startup_without_config()
+    writer_guard()
+    editor_flow()
+    editor_chunking()
+    editor_partial_failure()
+    editor_server_rejects_ids()
+    editor_read_only()
     print(f"\n{'ALL PASSED' if not failures else str(failures) + ' FAILED'}")
     sys.exit(1 if failures else 0)

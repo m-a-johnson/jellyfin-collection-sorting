@@ -24,6 +24,8 @@ jellyfin:
 app:
   # How long the in-memory snapshot is reused before re-reading Jellyfin.
   cache_seconds: 30
+  # true = the editor is disabled and the app can never change Jellyfin.
+  read_only: false
 """
 
 
@@ -38,6 +40,7 @@ class Config:
     verify_tls: bool
     user_id: str
     cache_seconds: int
+    read_only: bool = False
 
 
 def _as_bool(value, default: bool) -> bool:
@@ -113,4 +116,5 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         verify_tls=_as_bool(os.environ.get("JELLYFIN_VERIFY_TLS", jf.get("verify_tls")), True),
         user_id=str(os.environ.get("JELLYFIN_USER_ID") or jf.get("user_id") or "").strip(),
         cache_seconds=max(0, cache_seconds),
+        read_only=_as_bool(os.environ.get("READ_ONLY", app.get("read_only")), False),
     )
