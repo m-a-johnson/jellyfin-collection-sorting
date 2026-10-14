@@ -49,22 +49,20 @@ proxy's authentication and do not expose the port outside your network. Change r
 Seen in a real Jellyfin 12.1.0 OpenAPI spec: `GET /Items` and its parameters, `GET /Items/{itemId}/Collections`,
 `POST /Collections`, `POST` and `DELETE /Collections/{collectionId}/Items`, and the `/AutoCollections/ExportConfiguration` response.
 
-Not seen, assumed from earlier Jellyfin versions, and covered by the self-check:
-- `GET /System/Info/Public` (server name and version)
-- `GET /Library/VirtualFolders` (library list)
-- `GET /Items?parentId=<collection id>` returning a collection's members
-- That an admin API key can list items without a `user_id`
-- That `ProductionYear` is present on series items
-- The shape of Auto Collections `ExpressionCollections` entries (only the empty list has been seen)
+Checked on a real Jellyfin 12.1.0 server (the author's):
+- The **Self-check** passes: server info, library list, show years, collection members, and the per-show
+  collection lookup agreeing with the member lists.
+- **Set `user_id`** (an admin user) in the config. Without it, the collection-member lookup returned nothing and
+  `GET /Items/{id}/Collections` returned HTTP 401, so every show looked uncollected.
+- Adding and removing shows with comma-separated `ids` works, for one show and for several at once.
+- Removing the last show from a collection leaves the empty collection in place.
 
-Also not verified against a real server: the exact format Jellyfin 12.1 expects for `ids` on the write calls
-(the app sends them comma-separated, as earlier versions accepted; a rejection is shown with Jellyfin's own error
-text), and whether removing the last show from a collection deletes the collection. **Try the editor on a throwaway
+Still not seen: the shape of Auto Collections `ExpressionCollections` entries (only the empty list has been
+seen). If you use expression-based collections, check that they show up as managed (orange) before editing them.
+
+The app was also tested against a mock server that imitates these calls (including write failures and partial
+failures), and the editor was exercised in a real browser against that mock. **Try the editor on a throwaway
 collection first.**
-
-The app was tested against a mock server that imitates these calls (including write failures and partial
-failures), and the editor was exercised in a real browser against that mock. It has not been run against a real
-Jellyfin 12.1 beyond the self-check.
 
 ## Config
 
