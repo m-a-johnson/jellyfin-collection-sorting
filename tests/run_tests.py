@@ -398,6 +398,73 @@ def movies_flow():
         stop(app, mock)
 
 
+def item_collections_flow():
+    print("per-item collection editing")
+    mock, app = scenario({})
+    try:
+        ids = col_ids()
+        etv, evening, empty, sw = ids["ETV Discovery"], ids["Evening Lineup"], ids["Empty Test"], ids["Star Wars Collection"]
+        url = f"{base}/api/items/{BLUEY}/collections"
+        post = lambda body, item_url=url, headers=HDR: httpx.post(item_url, headers=headers, json=body)
+
+        check("missing header refused (403)", post({"add_to": [etv]}, headers={}).status_code == 403)
+        check("bad item id refused", post({"add_to": [etv]}, item_url=f"{base}/api/items/nothex/collections").status_code == 400)
+        check("unknown item refused (404)", post({"add_to": [etv]}, item_url=f"{base}/api/items/{'f' * 32}/collections").status_code == 404)
+        check("unknown collection refused (404)", post({"add_to": ["e" * 32]}).status_code == 404)
+        check("managed collection refused, nothing written (409)",
+              post({"add_to": [etv, sw]}).status_code == 409 and mock_log() == [], str(mock_log()))
+        check("add and remove same collection refused", post({"add_to": [etv], "remove_from": [etv]}).status_code == 400)
+
+        d = post({"add_to": [etv, evening], "dry_run": True}).json()
+        check("dry run reports but writes nothing", d["added_to"] == ["ETV Discovery", "Evening Lineup"] and not d["applied"] and mock_log() == [], str(d))
+
+        r = post({"add_to": [etv, empty]})
+        j = r.json()
+        check("added to two collections, verified", r.status_code == 200 and j["applied"] and j["verified"]
+              and j["added_to"] == ["ETV Discovery", "Empty Test"], r.text)
+        check("membership changed", BLUEY in members("ETV Discovery") and BLUEY in members("Empty Test"))
+        log = mock_log()
+        check("one single-id POST per collection",
+              [(e["method"], e["path"], e["ids"]) for e in log] ==
+              [("POST", f"/Collections/{etv}/Items", [BLUEY]), ("POST", f"/Collections/{empty}/Items", [BLUEY])], str(log))
+
+        r = post({"add_to": [etv], "remove_from": [empty, evening]})
+        j = r.json()
+        check("already-in and not-in are skipped, not sent",
+              r.status_code == 200 and j["added_to"] == [] and j["removed_from"] == ["Empty Test"]
+              and sorted(j["skipped"]) == ["ETV Discovery", "Evening Lineup"], r.text)
+        check("removed from one", BLUEY not in members("Empty Test") and BLUEY in members("ETV Discovery"))
+        check("collection itself survives removal of its last member", "Empty Test" in col_ids())
+        check("no forbidden call", not any(e.get("FORBIDDEN") for e in mock_log()))
+        movie = httpx.post(f"{base}/api/items/{MOANA}/collections", headers=HDR, json={"add_to": [evening]})
+        check("works for a movie too", movie.status_code == 200 and MOANA in members("Evening Lineup"), movie.text)
+    finally:
+        stop(app, mock)
+
+    print("per-item collection editing: failure partway")
+    mock, app = scenario({"MOCK_FAIL_REMOVE": "1"})
+    try:
+        ids = col_ids()
+        etv, evening = ids["ETV Discovery"], ids["Evening Lineup"]
+        r = httpx.post(f"{base}/api/items/{OCTONAUTS}/collections", headers=HDR,
+                       json={"add_to": [ids["Empty Test"]], "remove_from": [etv, evening]})
+        err = r.json().get("error", "")
+        check("502 naming what already went through", r.status_code == 502 and 'added to "Empty Test"' in err and "Partly applied" in err, r.text)
+        check("the add did happen", OCTONAUTS in members("Empty Test"))
+    finally:
+        stop(app, mock)
+
+    print("per-item collection editing: read-only")
+    mock, app = scenario({}, {"READ_ONLY": "1"})
+    try:
+        etv = col_ids()["ETV Discovery"]
+        check("refused (403), nothing sent",
+              httpx.post(f"{base}/api/items/{BLUEY}/collections", headers=HDR, json={"add_to": [etv]}).status_code == 403
+              and mock_log() == [])
+    finally:
+        stop(app, mock)
+
+
 def create_flow():
     print("create collection")
     mock, app = scenario({})
@@ -482,6 +549,7 @@ if __name__ == "__main__":
     editor_server_rejects_ids()
     editor_read_only()
     movies_flow()
+    item_collections_flow()
     create_flow()
     print(f"\n{'ALL PASSED' if not failures else str(failures) + ' FAILED'}")
     sys.exit(1 if failures else 0)
