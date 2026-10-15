@@ -4,10 +4,16 @@ A small web app to see which collections each show is in, which shows are in non
 in and out of a collection. Titles and years only. It reads from Jellyfin on demand and stores nothing.
 
 What it can change: **only collections and their membership**: create an empty collection (`POST /Collections`)
-and add or remove shows (`POST` / `DELETE /Collections/{id}/Items`). That never deletes a show or any media. It
-cannot delete collections; do that in Jellyfin. The write client in `app/jellyfin.py` validates the method, the path
-and every ID, so it cannot reach `DELETE /Items` (which deletes media from disk). Set `read_only: true`
-(or `READ_ONLY=1`) to disable editing completely.
+and add or remove shows (`POST` / `DELETE /Collections/{id}/Items`). That never deletes a show or any media.
+It can also delete a collection, but **only an empty one** (`DELETE /Items/{id}`, see below). The write client in
+`app/jellyfin.py` validates the method, the path and every ID, and never builds the bulk `DELETE /Items?ids=...`.
+Set `read_only: true` (or `READ_ONLY=1`) to disable editing completely.
+
+**Deleting a collection.** Jellyfin has no "delete collection" call; its only delete removes an item *and its files*.
+So the app refuses unless the id is a collection it listed, the collection is not plugin-managed, a fresh read and a
+second read just before the call both show zero members, and you typed its exact name. It needs `user_id` in the
+config (without it Jellyfin returns no members and "empty" would mean nothing). Do this on the **Collections** tab,
+after emptying the collection in the editor. Any ErsatzTV channel built on it loses its source.
 
 ## Run
 

@@ -283,6 +283,16 @@ def writer_guard():
         except ValueError:
             ok = True
         check(f"create refuses bad name {bad[:8]!r}", ok)
+    for bad in ("", "../Items", "nothex", "d" * 31, "d" * 33, "d" * 32 + "/x"):
+        try:
+            asyncio.run(w.delete_collection(bad)); ok = False
+        except ValueError:
+            ok = True
+        check(f"delete_collection refuses id {bad[:10]!r}", ok)
+    calls.clear()
+    asyncio.run(w.delete_collection(cid))
+    check("delete_collection builds only DELETE /Items/<hex id>, no params", calls == [("DELETE", f"/Items/{cid}", None)] or calls == [("DELETE", f"/Items/{cid}")], str(calls))
+    calls.clear()
     asyncio.run(w.create("Fine Name"))
     check("create sends only POST /Collections with name", calls == [("POST", "/Collections", {"name": "Fine Name"})], str(calls))
     asyncio.run(w.close())
@@ -465,6 +475,85 @@ def item_collections_flow():
         stop(app, mock)
 
 
+def delete_flow():
+    print("delete empty collection")
+    UID = {"JELLYFIN_USER_ID": "u" * 0 + "a" * 32}
+    mock, app = scenario({}, UID)
+    try:
+        ids = col_ids()
+        empty, etv, sw, evening = ids["Empty Test"], ids["ETV Discovery"], ids["Star Wars Collection"], ids["Evening Lineup"]
+        check("snapshot reports delete_enabled", httpx.get(f"{base}/api/snapshot").json()["delete_enabled"] is True)
+        url = lambda cid: f"{base}/api/collections/{cid}/delete"
+        post = lambda cid, name, **kw: httpx.post(url(cid), headers=kw.get("headers", HDR), json={"confirm_name": name, "dry_run": kw.get("dry_run", False)})
+
+        check("missing header refused (403)", post(empty, "Empty Test", headers={}).status_code == 403)
+        check("bad id refused", post("nothex", "x").status_code == 400)
+        check("a show id is refused (404), never sent", post(BLUEY, "Bluey").status_code == 404)
+        check("a movie id is refused (404), never sent", post(MOANA, "Moana").status_code == 404)
+        check("unknown id refused (404)", post("f" * 32, "x").status_code == 404)
+        r = post(etv, "ETV Discovery")
+        check("non-empty collection refused (409)", r.status_code == 409 and "still holds 4" in r.json()["error"], r.text)
+        check("managed collection refused (409)", post(sw, "Star Wars Collection").status_code == 409)
+        check("wrong confirmation name refused", post(empty, "empty test").status_code == 400)
+        check("nothing was sent to Jellyfin by any refusal", mock_log() == [], str(mock_log()))
+        d = post(empty, "Empty Test", dry_run=True)
+        check("dry run deletes nothing", d.status_code == 200 and d.json()["deleted"] is False and mock_log() == [])
+
+        r = post(empty, "Empty Test")
+        check("empty collection deleted and verified", r.status_code == 200 and r.json()["deleted"] and r.json()["verified"], r.text)
+        check("it is gone from the snapshot", "Empty Test" not in col_ids())
+        log = mock_log()
+        check("exactly one request: DELETE /Items/<that collection>, with zero members",
+              log == [{"method": "DELETE", "path": f"/Items/{empty}", "ids": [empty], "collection_deleted": True, "members_at_delete": 0}], str(log))
+        check("no media item or bulk delete was ever called", not any(e.get("FORBIDDEN") for e in log))
+        check("other collections untouched", {"ETV Discovery", "Evening Lineup"} <= set(col_ids()))
+        check("their members untouched", len(members("ETV Discovery")) == 4)
+        # empty by removal, then delete
+        a = apply(evening, remove=list(members("Evening Lineup")))
+        check("emptied via the editor", a.status_code == 200 and members("Evening Lineup") == set(), a.text)
+        check("then deletable", post(evening, "Evening Lineup").json().get("verified") is True)
+    finally:
+        stop(app, mock)
+
+    print("delete empty collection: needs user_id")
+    mock, app = scenario({})
+    try:
+        check("snapshot reports delete_enabled false", httpx.get(f"{base}/api/snapshot").json()["delete_enabled"] is False)
+        empty = col_ids()["Empty Test"]
+        r = httpx.post(f"{base}/api/collections/{empty}/delete", headers=HDR, json={"confirm_name": "Empty Test"})
+        check("refused (403) with a reason, nothing sent", r.status_code == 403 and "user_id" in r.json()["error"] and mock_log() == [], r.text)
+    finally:
+        stop(app, mock)
+
+    print("delete empty collection: read-only")
+    mock, app = scenario({}, {"READ_ONLY": "1", "JELLYFIN_USER_ID": "a" * 32})
+    try:
+        check("delete_enabled false in read-only", httpx.get(f"{base}/api/snapshot").json()["delete_enabled"] is False)
+        empty = col_ids()["Empty Test"]
+        check("refused (403), nothing sent",
+              httpx.post(f"{base}/api/collections/{empty}/delete", headers=HDR, json={"confirm_name": "Empty Test"}).status_code == 403
+              and mock_log() == [])
+    finally:
+        stop(app, mock)
+
+    print("delete empty collection: Jellyfin fails or ignores it")
+    mock, app = scenario({"MOCK_FAIL_DELETE": "1"}, UID)
+    try:
+        empty = col_ids()["Empty Test"]
+        r = httpx.post(f"{base}/api/collections/{empty}/delete", headers=HDR, json={"confirm_name": "Empty Test"})
+        check("502 with Jellyfin's status", r.status_code == 502 and "HTTP 500" in r.json()["error"], r.text)
+        check("collection still listed", "Empty Test" in col_ids())
+    finally:
+        stop(app, mock)
+    mock, app = scenario({"MOCK_DELETE_NOOP": "1"}, UID)
+    try:
+        empty = col_ids()["Empty Test"]
+        r = httpx.post(f"{base}/api/collections/{empty}/delete", headers=HDR, json={"confirm_name": "Empty Test"})
+        check("reported as not verified when it is still there", r.status_code == 200 and r.json()["deleted"] and r.json()["verified"] is False, r.text)
+    finally:
+        stop(app, mock)
+
+
 def create_flow():
     print("create collection")
     mock, app = scenario({})
@@ -550,6 +639,7 @@ if __name__ == "__main__":
     editor_read_only()
     movies_flow()
     item_collections_flow()
+    delete_flow()
     create_flow()
     print(f"\n{'ALL PASSED' if not failures else str(failures) + ' FAILED'}")
     sys.exit(1 if failures else 0)

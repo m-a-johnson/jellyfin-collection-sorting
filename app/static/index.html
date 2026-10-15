@@ -123,7 +123,7 @@ const state = {
   editCol: null, pendAdd: new Set(), pendRem: new Set(), selL: new Set(), selR: new Set(),
   lastL: null, lastR: null, qL: "", qR: "", confirming: false, busy: false, result: null,
   creating: false, newName: "", kind: "show",
-  ucSel: new Set(), ucTarget: "", ucConfirm: false, itemEdit: null, itemSet: new Set(), itemConfirm: false,
+  delCol: null, delText: "", ucSel: new Set(), ucTarget: "", ucConfirm: false, itemEdit: null, itemSet: new Set(), itemConfirm: false,
 };
 let ed = {};   // handles to the editor's DOM nodes, rebuilt whenever the editor tab renders
 const KINDS = { show: { many: "shows", Many: "Shows" }, movie: { many: "movies", Many: "Movies" } };
@@ -358,13 +358,46 @@ async function doBulkAdd(target, chosen) {
 }
 
 function renderCollections() {
-  return [h("div", { class: "muted bar" }, `${state.snap.collections.length} collections`),
-    ...state.snap.collections.map(c => h("details", {},
-      h("summary", {}, c.name, h("span", { class: "muted" }, ` · ${countKinds(c)}`),
-        c.other_count ? h("span", { class: "muted" }, ` · ${c.other_count} other items`) : null,
-        c.managed ? h("span", { class: "badge" }, "managed by Auto Collections") : null),
-      h("ul", {}, c.members.map(m => h("li", {}, label(m),
-        m.kind === "movie" ? h("span", { class: "chip" }, "movie") : null)))))];
+  const snap = state.snap;
+  const note = !snap.read_only && !snap.delete_enabled
+    ? [h("div", { class: "muted small" }, "Deleting empty collections is off: set user_id in the config so the app can reliably see collection members.")] : [];
+  return [h("div", { class: "muted bar" }, `${snap.collections.length} collections`), ...note,
+    ...snap.collections.map(c => {
+      const empty = !c.members.length && !c.other_count;
+      return h("details", { open: state.delCol === c.id },
+        h("summary", {}, c.name, h("span", { class: "muted" }, ` · ${empty ? "empty" : countKinds(c)}`),
+          c.other_count ? h("span", { class: "muted" }, ` · ${c.other_count} other items`) : null,
+          c.managed ? h("span", { class: "badge" }, "managed by Auto Collections") : null),
+        h("ul", {}, c.members.map(m => h("li", {}, label(m),
+          m.kind === "movie" ? h("span", { class: "chip" }, "movie") : null))),
+        snap.delete_enabled && empty && !c.managed ? deletePanel(c) : null);
+    })];
+}
+function deletePanel(c) {
+  if (state.delCol !== c.id)
+    return h("div", { class: "row-actions" }, h("button", { class: "act", onclick: (ev) => {
+      ev.preventDefault(); state.delCol = c.id; state.delText = ""; renderView(); } }, "Delete this empty collection…"));
+  const matches = state.delText === c.name;
+  return h("div", { class: "editpanel" },
+    h("div", { class: "review" }, h("strong", {}, `Delete the empty collection "${c.name}"?`),
+      h("div", { class: "muted small" }, "This removes the collection from Jellyfin, and any ErsatzTV channel built on it will lose its source. " +
+        "It holds no shows or movies, and none are deleted. Type the collection's exact name to confirm.")),
+    h("div", { class: "row-actions" },
+      h("input", { type: "text", "aria-label": "Type the collection name to confirm", placeholder: c.name, value: state.delText,
+        oninput: (ev) => { state.delText = ev.target.value; const b = document.getElementById("delGo"); if (b) b.disabled = state.busy || ev.target.value !== c.name; } }),
+      h("button", { id: "delGo", class: "act primary", disabled: !matches || state.busy, onclick: () => doDelete(c) }, state.busy ? "Deleting…" : "Delete"),
+      h("button", { class: "act", disabled: state.busy, onclick: () => { state.delCol = null; state.delText = ""; renderView(); } }, "Cancel")));
+}
+async function doDelete(c) {
+  state.busy = true; setMsg(""); renderView();
+  try {
+    const r = await postJson(`/api/collections/${encodeURIComponent(c.id)}/delete`, { confirm_name: state.delText });
+    if (r.verified) setMsg(`Deleted the empty collection "${r.name}". Checked against Jellyfin: it is gone.`, "ok");
+    else setMsg(`Asked Jellyfin to delete "${r.name}", but it still lists it. Refresh and check.`);
+    state.delCol = null; state.delText = "";
+  } catch (e) { setMsg(`Not deleted: ${e.message}`); }
+  state.busy = false;
+  await load(true, true);
 }
 function countKinds(c) {
   const n = (k) => c.members.filter(m => m.kind === k).length;

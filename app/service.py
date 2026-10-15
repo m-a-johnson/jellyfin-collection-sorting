@@ -42,8 +42,9 @@ def _managed_names(export: dict) -> set[str]:
 
 class Service:
     def __init__(self, reader: JellyfinReader, writer: CollectionWriter,
-                 cache_seconds: int, read_only: bool = False):
+                 cache_seconds: int, read_only: bool = False, can_delete: bool = False):
         self._reader = reader
+        self._can_delete = can_delete
         self._writer = writer
         self._ttl = cache_seconds
         self._read_only = read_only
@@ -147,6 +148,7 @@ class Service:
         return {
             "fetched_at": time.time(),
             "read_only": self._read_only,
+            "delete_enabled": self._can_delete and not self._read_only,
             "managed_names": sorted(managed),
             "server": {"name": info.get("ServerName"), "version": info.get("Version")},
             "libraries": libraries,
@@ -276,6 +278,63 @@ class Service:
                     mismatches.append({"id": sid, "name": names.get(sid, sid), "expected": "out"})
             result["mismatches"] = mismatches
             result["verified"] = not mismatches
+            return result
+
+    async def delete_collection(self, collection_id: str, confirm_name: str, dry_run: bool = False) -> dict:
+        """Delete one EMPTY collection.
+
+        Jellyfin's only delete call removes the item and its files, and I could not prove
+        from its source what it would do to the members of a non-empty collection. So this
+        refuses unless a fresh read, and a second direct read just before the call, both
+        show zero members, and the id must be a collection the app listed (never a show or
+        movie id). Needs user_id in the config: without it Jellyfin returns no members for
+        any collection, so "empty" would not mean anything.
+        """
+        if self._read_only:
+            raise ApplyError("The app is running in read-only mode.", 403)
+        if not self._can_delete:
+            raise ApplyError("Deleting needs user_id in the config. Without it Jellyfin returns no "
+                             "collection members, so the app cannot tell whether a collection is empty.", 403)
+        if not HEX32.match(collection_id):
+            raise ApplyError("Invalid collection id.")
+
+        async with self._write_lock:
+            snap = await self.snapshot(force=True)
+            col = next((c for c in snap["collections"] if c["id"] == collection_id), None)
+            if col is None:
+                raise ApplyError("Collection not found. It may already be gone; refresh.", 404)
+            if col["managed"]:
+                raise ApplyError(f'"{col["name"]}" is managed by the Auto Collections plugin, which '
+                                 "would recreate it. Remove its rule in the plugin instead.", 409)
+            held = len(col["members"]) + col["other_count"]
+            if held:
+                raise ApplyError(f'"{col["name"]}" still holds {held} item(s). Remove them first; '
+                                 "only empty collections can be deleted here.", 409)
+            if confirm_name != col["name"]:
+                raise ApplyError("The confirmation name does not match the collection's name.")
+
+            result = {"id": collection_id, "name": col["name"], "dry_run": dry_run,
+                      "deleted": False, "verified": None}
+            if dry_run:
+                return result
+            try:
+                again = await self._reader.collection_members(collection_id)
+            except JellyfinError as exc:
+                raise ApplyError(f"Could not re-check the collection's members, so nothing was deleted: {exc}", 502) from exc
+            if again:
+                self._cached = None
+                raise ApplyError(f'"{col["name"]}" gained members just now; nothing was deleted.', 409)
+            try:
+                await self._writer.delete_collection(collection_id)
+            except JellyfinError as exc:
+                self._cached = None
+                raise ApplyError(f"Jellyfin refused to delete the collection: {exc}", 502) from exc
+            except ValueError as exc:  # defensive: the writer's own validation
+                raise ApplyError(f"Refused to send: {exc}", 400) from exc
+
+            result["deleted"] = True
+            fresh = await self.snapshot(force=True)
+            result["verified"] = not any(c["id"] == collection_id for c in fresh["collections"])
             return result
 
     async def set_item_collections(self, item_id: str, add_to: list[str], remove_from: list[str],
