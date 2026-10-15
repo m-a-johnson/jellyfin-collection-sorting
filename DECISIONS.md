@@ -46,6 +46,8 @@
 - **Movies are a mode, not a mixed list.** Show and movie titles can collide, and a collection may hold both, so a
   Shows/Movies switch scopes every tab while staged changes and the selected collection carry across it. Library kinds
   come from the Jellyfin library type (tvshows, movies; mixed or untyped counts as both). Music and other types are ignored.
-- **Verified on a real server:** `POST /Collections` with no `ids` creates an empty collection on 12.1.
-- **Unverified for movies:** `includeItemTypes=Movie` on a real server (the self-check now samples movies too).
+- **Verified on a real 12.1 server (Oct 2026):** `POST /Collections` with no `ids` creates an empty collection;
+  `includeItemTypes=Movie` works (Movies mode); the per-show and Uncollected multi-collection writes work; deleting an
+  empty collection with `DELETE /Items/{id}` works. Not verified: what that delete does to a collection that still has
+  members, which is why the app never sends it for one.
 - **Still unverified:** the shape of Auto Collections `ExpressionCollections` entries (only an empty list has been seen).

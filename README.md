@@ -72,9 +72,9 @@ Checked on a real Jellyfin 12.1.0 server (the author's):
 - Adding and removing shows with comma-separated `ids` works, for one show and for several at once.
 - Removing the last show from a collection leaves the empty collection in place.
 
-Creating an empty collection with **New collection…** works on a real 12.1 server.
-
-Not yet tried on a real server: **Movies mode** (`includeItemTypes=Movie`). Run the Self-check first; it samples movies too.
+Also confirmed working on a real 12.1 server (October 2026): creating an empty collection (**New collection…**),
+**Movies mode**, adding from the **Uncollected** tab, editing a show's collections from the **Shows** tab, and deleting an
+empty collection.
 
 Still not seen: the shape of Auto Collections `ExpressionCollections` entries (only the empty list has been
 seen). If you use expression-based collections, check that they show up as managed (orange) before editing them.
