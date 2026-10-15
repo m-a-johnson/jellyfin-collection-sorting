@@ -84,6 +84,8 @@
   .cols label { display:inline-flex; gap:6px; align-items:baseline; cursor:pointer; }
   .cols label.managed { cursor:not-allowed; color:var(--auto); }
   .row-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  footer { margin-top:28px; }
+  .chip.lib { background:none; border:1px solid var(--line); color:var(--muted); }
   .newcol { display: inline-flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
   .newcol input { min-width: 12rem; }
 </style>
@@ -97,6 +99,7 @@
   <div class="bar" id="filters"></div>
   <div id="msg"></div>
   <div id="view"></div>
+  <footer id="foot" class="muted small"></footer>
 </main>
 <script>
 "use strict";
@@ -116,6 +119,13 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 const label = (s) => s.year ? `${s.name} (${s.year})` : s.name;
+// Library names only help when there is more than one library to tell apart.
+function libChips(s) {
+  const libs = state.snap.libraries.filter(l => l.kinds.includes(s.kind || state.kind));
+  if (libs.length < 2) return [];
+  const names = new Map(state.snap.libraries.map(l => [l.id, l.name]));
+  return (s.library_ids || []).map(id => names.get(id)).filter(Boolean).map(n => h("span", { class: "chip lib", title: "Library" }, n));
+}
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (a.year || 0) - (b.year || 0);
 
 const state = {
@@ -244,7 +254,7 @@ function renderShows() {
   const ro = !!state.snap.read_only;
   return [h("div", { class: "muted" }, `${rows.length} ${kw().many}`),
     h("ul", { class: "rows" }, rows.map(s => h("li", {},
-      h("span", { class: "title" }, label(s)),
+      h("span", { class: "title" }, label(s)), ...libChips(s),
       s.collection_ids.length ? s.collection_ids.map(id => cols.get(id)).filter(Boolean).map(c =>
         h("span", { class: "chip" + (c.managed ? " auto" : "") }, c.name))
         : h("span", { class: "muted" }, "no collection"),
@@ -337,12 +347,12 @@ function renderUncollected() {
       (state.ignoreManaged ? ` (${kw().many} only in plugin-managed collections are included)` : "")),
     ...tools, ...confirm,
     h("ul", { class: "rows" }, rows.map(s => h("li", {},
-      ro ? h("span", { class: "title" }, label(s))
+      ro ? [h("span", { class: "title" }, label(s)), ...libChips(s)]
          : h("label", { class: "selrow" },
              h("input", { type: "checkbox", checked: state.ucSel.has(s.id), "aria-label": `Select ${s.name}`,
                onchange: (ev) => { ev.target.checked ? state.ucSel.add(s.id) : state.ucSel.delete(s.id);
                                    state.ucConfirm = false; renderView(); } }),
-             h("span", { class: "title" }, label(s))))))];
+             h("span", { class: "title" }, label(s)), ...libChips(s)))))];
 }
 async function doBulkAdd(target, chosen) {
   state.busy = true; setMsg(""); renderView();
@@ -455,7 +465,7 @@ function fill(ul, items, side) {
         "aria-selected": sel.has(s.id) ? "true" : "false",
         class: "row" + (sel.has(s.id) ? " sel" : "") + (pend ? (side === "R" ? " pend-add" : " pend-rem") : "") },
       h("span", { class: "mark" }, pend ? (side === "R" ? "+" : "−") : ""),
-      h("span", { class: "title" }, label(s)),
+      h("span", { class: "title" }, label(s)), ...libChips(s),
       others.slice(0, 3).map(c => h("span", { class: "chip" + (c.managed ? " auto" : "") }, c.name)),
       others.length > 3 ? h("span", { class: "muted small" }, `+${others.length - 3}`) : null);
   }));
@@ -698,6 +708,22 @@ function renderView() {
   if (state.tab === "editor") updateEditor();
 }
 function render() { renderTabs(); renderFilters(); renderView(); }
+
+// Staged changes live only in this page, so warn before it is closed or reloaded with any pending.
+function hasUnsaved() {
+  if (!state.snap) return false;
+  if (state.pendAdd.size || state.pendRem.size) return true;
+  const it = state.itemEdit && [...state.snap.shows, ...state.snap.movies].find(x => x.id === state.itemEdit);
+  if (it) { const d = itemDiff(it); if (d.add.length || d.remove.length) return true; }
+  return false;
+}
+window.addEventListener("beforeunload", (ev) => {
+  if (hasUnsaved()) { ev.preventDefault(); ev.returnValue = ""; }
+});
+
+fetch("/api/health").then(r => r.json()).then(b => {
+  document.getElementById("foot").textContent = `Collection Manager ${b.version || ""}`.trim();
+}).catch(() => {});
 
 load(false);
 </script>

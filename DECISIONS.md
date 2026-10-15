@@ -24,6 +24,11 @@
   collection against a fresh read (missing or plugin-managed collections refuse the whole request before any write),
   skips no-ops, writes one collection at a time, stops at the first failure and reports what already went through,
   then re-reads to verify. Bulk add from the Uncollected tab reuses the existing apply endpoint.
+- **Health is liveness only.** `/api/health` never calls Jellyfin, so a Jellyfin restart does not mark this container
+  unhealthy. The version is baked in at build time (`APP_VERSION` build-arg: release tag, else `main-<sha>`).
+- **Library chips only when there is more than one library of that kind**, to avoid noise for single-library setups.
+- **Unsaved-changes warning** covers staged editor changes and an open per-show edit with a diff; checkbox selections on the
+  Uncollected tab are not changes and do not warn.
 - **Verified on a real 12.1.0 server:** the self-check calls (server info, library list, show years, collection
   members, per-show lookup), comma-separated `ids` on collection writes (one and several shows), and that removing a
   collection's last item leaves the collection. Collection-member and per-show lookups need `user_id` set; without
