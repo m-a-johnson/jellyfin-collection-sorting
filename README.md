@@ -77,6 +77,20 @@ The app was also tested against a mock server that imitates these calls (includi
 failures), and the editor was exercised in a real browser against that mock. **Try the editor on a throwaway
 collection first.**
 
+## Versions, health and releases
+
+- The page footer shows the build that is running: `main-<short sha>` for a normal merge, or `1.2.0` for a release.
+- `GET /api/health` returns `{"status":"ok","version":...}` without calling Jellyfin. The image's `HEALTHCHECK` uses it,
+  so Unraid shows the container as healthy.
+- **Releasing:** after merging to `main`, tag that commit and push the tag. The workflow then also publishes
+  `ghcr.io/m-a-johnson/jellyfin-collection-sorting:1.2.0` (alongside `latest` and the sha tag), so you can pin or roll back:
+  ```bash
+  git switch main && git pull
+  git tag v1.2.0
+  git push origin v1.2.0
+  ```
+  Pull requests also build the image (without pushing it), so a broken Dockerfile shows up before merge.
+
 ## Config
 
 See `config.example.yml`. Environment variables override the file.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -67,6 +68,12 @@ class ItemCollectionsBody(BaseModel):
     add_to: list[str] = Field(default_factory=list, max_length=200)
     remove_from: list[str] = Field(default_factory=list, max_length=200)
     dry_run: bool = False
+
+
+@app.get("/api/health")
+async def health():
+    """Liveness only: no call to Jellyfin, so the container is not marked unhealthy when Jellyfin restarts."""
+    return {"status": "ok", "version": os.environ.get("APP_VERSION", "dev")}
 
 
 @app.get("/api/snapshot")

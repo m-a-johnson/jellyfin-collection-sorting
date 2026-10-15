@@ -57,7 +57,8 @@ def scenario(mock_env: dict, app_env: dict | None = None):
     mock = start(["tests.mock_jellyfin:app"], MOCK_PORT, "/System/Info/Public", mock_env)
     cfg = Path(tempfile.mkdtemp()) / "config.yml"
     env = {"JELLYFIN_URL": f"http://127.0.0.1:{MOCK_PORT}", "JELLYFIN_API_KEY": "testkey",
-           "CONFIG_PATH": str(cfg), "JF_PAGE_SIZE": "3", "CACHE_SECONDS": "0"}
+           "CONFIG_PATH": str(cfg), "JF_PAGE_SIZE": "3", "CACHE_SECONDS": "0",
+           "APP_VERSION": "9.9.9-test"}
     env.update(app_env or {})
     app = start(["app.main:app"], APP_PORT, "/", env)
     return mock, app
@@ -147,6 +148,8 @@ def happy_path():
         bad = [c for c in sc if c["status"] != "pass"]
         check("self-check all pass", not bad, str(bad))
         check("native cross-check sampled 12 titles", any("12 sampled titles agree" in c["detail"] for c in sc), str(sc))
+        hz = httpx.get(f"{base}/api/health")
+        check("health endpoint: ok and reports the build version", hz.status_code == 200 and hz.json() == {"status": "ok", "version": "9.9.9-test"}, hz.text)
         page = httpx.get(f"{base}/")
         check("frontend served", page.status_code == 200 and "Collection Manager" in page.text)
     finally:
