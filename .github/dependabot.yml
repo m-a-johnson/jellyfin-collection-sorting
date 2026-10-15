@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # Python packages. requirements.txt pins exact versions, so a rebuild never silently picks up a
+  # new release; Dependabot proposes bumps as pull requests that must pass the test and build jobs.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python-packages:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+
+  # Versions of the actions used in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
