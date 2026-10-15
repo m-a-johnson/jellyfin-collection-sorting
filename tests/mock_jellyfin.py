@@ -8,6 +8,8 @@ Scenario switches (environment variables):
   MOCK_FAIL_REMOVE=1   DELETE /Collections/{id}/Items returns HTTP 500
   MOCK_REFUSE_EMPTY_CREATE=1  POST /Collections without ids returns HTTP 400
   MOCK_CREATE_NO_BODY=1       POST /Collections returns 204 with no id
+  MOCK_DELETE_NOOP=1   DELETE /Items/{id} returns 204 but deletes nothing
+  MOCK_FAIL_DELETE=1   DELETE /Items/{id} returns HTTP 500
 
 Every write is recorded and readable at GET /__log, including any call to
 DELETE /Items (which the app must never send).
@@ -188,6 +190,22 @@ def remove_items(cid: str, request: Request):
 @app.delete("/Items")
 def forbidden_delete(request: Request):
     LOG.append({"method": "DELETE", "path": "/Items", "ids": [], "FORBIDDEN": True})
+    return Response(status_code=204)
+
+
+@app.delete("/Items/{item_id}")
+def delete_item(item_id: str):
+    """Real Jellyfin deletes the item and its files. Anything that is not a collection is a FORBIDDEN hit."""
+    iid = norm(item_id)
+    box_match = next((b for b in BOXSETS if b["Id"] == iid), None)
+    LOG.append({"method": "DELETE", "path": f"/Items/{iid}", "ids": [iid],
+                "collection_deleted": box_match is not None,
+                "members_at_delete": len(box_match["members"]) if box_match else None,
+                **({} if box_match is not None else {"FORBIDDEN": True})})
+    if os.environ.get("MOCK_FAIL_DELETE"):
+        return JSONResponse({"error": "boom"}, status_code=500)
+    if box_match is not None and not os.environ.get("MOCK_DELETE_NOOP"):
+        BOXSETS.remove(box_match)
     return Response(status_code=204)
 
 

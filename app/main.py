@@ -21,7 +21,7 @@ except ConfigError as exc:
 
 reader = JellyfinReader(CONFIG.url, CONFIG.api_key, CONFIG.verify_tls, CONFIG.user_id)
 writer = CollectionWriter(CONFIG.url, CONFIG.api_key, CONFIG.verify_tls)
-service = Service(reader, writer, CONFIG.cache_seconds, CONFIG.read_only)
+service = Service(reader, writer, CONFIG.cache_seconds, CONFIG.read_only, can_delete=bool(CONFIG.user_id))
 
 
 @asynccontextmanager
@@ -63,6 +63,11 @@ class CreateBody(BaseModel):
     dry_run: bool = False
 
 
+class DeleteBody(BaseModel):
+    confirm_name: str = Field(max_length=200)
+    dry_run: bool = False
+
+
 class ItemCollectionsBody(BaseModel):
     add_to: list[str] = Field(default_factory=list, max_length=200)
     remove_from: list[str] = Field(default_factory=list, max_length=200)
@@ -87,6 +92,11 @@ async def create_collection(body: CreateBody):
 @app.post("/api/items/{item_id}/collections", dependencies=[Depends(require_app_header)])
 async def set_item_collections(item_id: str, body: ItemCollectionsBody):
     return await service.set_item_collections(item_id, body.add_to, body.remove_from, body.dry_run)
+
+
+@app.post("/api/collections/{collection_id}/delete", dependencies=[Depends(require_app_header)])
+async def delete_collection(collection_id: str, body: DeleteBody):
+    return await service.delete_collection(collection_id, body.confirm_name, body.dry_run)
 
 
 @app.post("/api/collections/{collection_id}/apply", dependencies=[Depends(require_app_header)])

@@ -4,11 +4,14 @@ Two classes, split on purpose:
 
 * JellyfinReader sends GET requests only. It has no way to change anything.
 * CollectionWriter is the only code that can change anything, and it can only
-  send three kinds of request: POST /Collections (create an empty collection),
-  and POST or DELETE /Collections/{32-hex id}/Items (add or remove membership,
-  which never touches the media). It cannot reach DELETE /Items, which deletes
-  media from the filesystem: the method, the path and every ID are validated
-  before any request is built.
+  send four kinds of request: POST /Collections (create an empty collection),
+  POST or DELETE /Collections/{32-hex id}/Items (add or remove membership,
+  which never touches the media), and DELETE /Items/{32-hex id} through
+  delete_collection(). That last one deletes an item from the library AND its
+  files, so it is only ever called by Service.delete_collection, after a fresh
+  read shows the id is a collection that is empty and not plugin-managed. The
+  bulk form, DELETE /Items?ids=..., is never built. The method, the path and
+  every ID are validated before any request is built.
 """
 from __future__ import annotations
 
@@ -94,6 +97,21 @@ class CollectionWriter:
             return None
         raw = data.get("Id") if isinstance(data, dict) else None
         return nid(raw) if raw else None
+
+    async def delete_collection(self, collection_id: str) -> None:
+        """DELETE /Items/{id}. Jellyfin removes the item and its files (for a collection, its
+        own folder under Jellyfin's data directory). The caller must already have proved
+        that the id is an empty collection."""
+        if not HEX32.match(collection_id):
+            raise ValueError("collection id must be 32 hex characters")
+        path = f"/Items/{collection_id}"
+        try:
+            resp = await self._client.request("DELETE", path)
+        except httpx.HTTPError as exc:
+            raise JellyfinError(f"DELETE {path} failed: {type(exc).__name__}: {exc}") from exc
+        if resp.status_code >= 400:
+            body = resp.text.strip().replace("\n", " ")[:200]
+            raise JellyfinError(f"DELETE {path} -> HTTP {resp.status_code}: {body}")
 
     async def add(self, collection_id: str, ids: list[str]) -> None:
         for i in range(0, len(ids), WRITE_CHUNK):

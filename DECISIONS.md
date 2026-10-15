@@ -1,9 +1,9 @@
 # Decisions
 
 - **Reading and writing are separate classes.** `JellyfinReader` only sends GET. `CollectionWriter` can only send
-  `POST /Collections` (create, name only) and `POST`/`DELETE /Collections/{32-hex id}/Items`; method, path, name and
-  every ID are validated before a request is built.
-  `DELETE /Items` deletes media from the filesystem and must never be reachable. Tests assert this.
+  `POST /Collections` (create, name only), `POST`/`DELETE /Collections/{32-hex id}/Items`, and `DELETE /Items/{32-hex id}`
+  for one empty collection; method, path, name and every ID are validated before a request is built.
+  The bulk `DELETE /Items?ids=...` (it deletes in a loop and stops partway) is never built. Tests assert both.
 - **Staged edits with a review step.** The two-list editor only changes the screen until Apply is confirmed.
   Reason: collections drive ErsatzTV channel lineups, so a misclick should be cheap to undo.
 - **The server re-validates every apply against a fresh read.** Adds of existing members and removals of non-members
@@ -28,11 +28,16 @@
   members, per-show lookup), comma-separated `ids` on collection writes (one and several shows), and that removing a
   collection's last item leaves the collection. Collection-member and per-show lookups need `user_id` set; without
   it members came back empty and the per-show call returned 401.
-- **Create collection is built; delete is deliberately not.** Creating sends `POST /Collections?name=...` and nothing
-  else, then re-reads Jellyfin to confirm. Names that already exist (case-insensitive) or that an Auto Collections rule
-  owns are refused. The only delete endpoint seen in the 12.1 spec is `DELETE /Items`, described as deleting from the
-  library *and filesystem*. Whether that spares media when the item is a collection is unverified, and a wrong guess
-  could destroy files, so collections are deleted in Jellyfin's own UI for now.
+- **Create collection:** sends `POST /Collections?name=...` and nothing else, then re-reads Jellyfin to confirm. Names
+  that already exist (case-insensitive) or that an Auto Collections rule owns are refused.
+- **Delete collection is empty-only, and why.** Jellyfin's collection controller (read from `master` on GitHub, not the
+  12.1.0 tag) has no delete action. The only way is `DELETE /Items/{id}` (or the bulk form), which passes
+  `DeleteFileLocation = true` and removes the item's files. For a collection that should be its own folder under
+  Jellyfin's data directory, but I did not see `Folder.GetRecursiveChildren` or `BoxSet.GetDeletePaths`, so I could not
+  prove what happens to members. The app therefore deletes only a collection that a fresh read and a second direct read
+  both show empty, that is not plugin-managed, and whose exact name was typed. It needs `user_id` (without it member
+  reads come back empty, which would make "empty" meaningless). Single-id route chosen over the bulk route because the
+  bulk one deletes in a loop and returns early on the first failure.
 - **Movies are a mode, not a mixed list.** Show and movie titles can collide, and a collection may hold both, so a
   Shows/Movies switch scopes every tab while staged changes and the selected collection carry across it. Library kinds
   come from the Jellyfin library type (tvshows, movies; mixed or untyped counts as both). Music and other types are ignored.
