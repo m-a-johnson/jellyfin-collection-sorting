@@ -46,6 +46,11 @@
 - **Movies are a mode, not a mixed list.** Show and movie titles can collide, and a collection may hold both, so a
   Shows/Movies switch scopes every tab while staged changes and the selected collection carry across it. Library kinds
   come from the Jellyfin library type (tvshows, movies; mixed or untyped counts as both). Music and other types are ignored.
+- **Dependencies are pinned and Dependabot proposes bumps.** `requirements.txt` used `>=`, which means a rebuild could
+  silently pull a breaking release, and Dependabot has nothing to update when a range already allows the latest. Direct
+  packages are now exact (`==`); transitive ones (starlette, pydantic) are still resolved at build time. Weekly grouped
+  PRs for pip and GitHub Actions run the same `test` and image-build checks as any PR. The Docker base image
+  (`python:3.13-slim`) is a floating tag, so Dependabot cannot bump it; its security patches arrive only when the image is rebuilt.
 - **Verified on a real 12.1 server (Oct 2026):** `POST /Collections` with no `ids` creates an empty collection;
   `includeItemTypes=Movie` works (Movies mode); the per-show and Uncollected multi-collection writes work; deleting an
   empty collection with `DELETE /Items/{id}` works. Not verified: what that delete does to a collection that still has
